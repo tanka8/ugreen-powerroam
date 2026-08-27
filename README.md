@@ -131,6 +131,11 @@ encryption used at login - against a synthetic sample frame
 (`docs/sample_telemetry_frame.json`, shaped like a real capture but with fictional
 device identifiers), with no network, no Home Assistant, and no credentials.
 
+`tests_ha/` runs the config flow through Home Assistant itself using
+`pytest-homeassistant-custom-component`. **That harness does not work on Windows** -
+its autouse fixtures need a socketpair that `pytest-socket` blocks - so those run on
+Linux in CI. See `tests_ha/README.md`.
+
 CI also runs `ruff check`, `ruff format --check`, Home Assistant's `hassfest`, and
 the HACS validation action.
 

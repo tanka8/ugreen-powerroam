@@ -21,9 +21,24 @@ jobs:
       # aiohttp and cryptography are Home Assistant dependencies rather than ours,
       # but the tests import the api module directly, so they are needed here.
       - run: pip install pytest aiohttp cryptography ruff
-      - run: python -m ruff check custom_components/ tests/
-      - run: python -m ruff format --check custom_components/ tests/
+      - run: python -m ruff check custom_components/ tests/ tests_ha/
+      - run: python -m ruff format --check custom_components/ tests/ tests_ha/
       - run: python -m pytest tests/ -v
+
+  config-flow-tests:
+    # The Home Assistant test harness does not work on Windows, so these run only
+    # here. Python 3.13 to get the newest harness pip will resolve.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install pytest-homeassistant-custom-component
+      # Run from inside tests_ha so its own pytest.ini applies. The root config
+      # disables the Home Assistant plugin, which these tests require.
+      - run: python -m pytest . -v
+        working-directory: tests_ha
 
   hassfest:
     runs-on: ubuntu-latest
