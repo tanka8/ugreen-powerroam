@@ -1,0 +1,12 @@
+{
+  "domain": "ugreen_powerroam",
+  "name": "UGREEN PowerRoam",
+  "codeowners": ["@tanka8"],
+  "config_flow": true,
+  "documentation": "https://github.com/tanka8/ugreen-powerroam",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/tanka8/ugreen-powerroam/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

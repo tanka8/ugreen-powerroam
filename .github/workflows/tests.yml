@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Once the repository is public anyone can open a pull request, and every job here
+# only ever reads the checkout.
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      # aiohttp and cryptography are Home Assistant dependencies rather than ours,
+      # but the tests import the api module directly, so they are needed here.
+      - run: pip install pytest aiohttp cryptography ruff
+      - run: python -m ruff check custom_components/ tests/
+      - run: python -m ruff format --check custom_components/ tests/
+      - run: python -m pytest tests/ -v
+
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
+        with:
+          category: integration

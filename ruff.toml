@@ -1,0 +1,25 @@
+# Mirrors the rules Home Assistant Core enforces on integrations.
+target-version = "py312"
+line-length = 88
+
+[lint]
+select = [
+    "A",      # builtins shadowing
+    "ASYNC",  # async correctness
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "E", "W", # pycodestyle
+    "F",      # pyflakes
+    "I",      # import sorting
+    "N",      # naming
+    "RUF",
+    "SIM",    # simplify
+    "T20",    # no print in the integration
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",  # line length is handled by the formatter
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["T20"]
