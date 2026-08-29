@@ -111,13 +111,20 @@ station accepts only one Bluetooth connection at a time, so the app and Home Ass
 cannot both hold it.
 
 Setup reads the unit's serial number over BLE and uses it as the entry's identity,
-which is the same identity the cloud entry uses. That means **you can migrate from
+which is the same identity the cloud entry uses. (The unit reports two serials -
+the one the cloud identifies it by is the first.) That means **you can migrate from
 cloud to Bluetooth and keep your entity history**: remove the cloud entry, add the
 Bluetooth one, and the entities reattach. It also means the two cannot be configured
 side by side for one device, which is deliberate - two entries for one power station
 would give you two of every entity.
 
 **For the cloud** sign in with your UGREEN app account.
+
+> **Upgrading from v1.1.0?** That release identified Bluetooth entries by the wrong
+> one of the unit's two serials, so a Bluetooth entry could not recognise the cloud
+> entry for the same power station - you would get both, with two of every shared
+> entity. Remove the Bluetooth entry and add it again on v1.1.1 or later. Nothing
+> else is affected, and cloud-only setups were never involved.
 
 ## How it works
 
