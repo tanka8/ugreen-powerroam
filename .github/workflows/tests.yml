@@ -34,7 +34,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - run: pip install pytest-homeassistant-custom-component
+      # The integration depends on bluetooth_adapters, so Home Assistant sets
+      # that component up during these tests and needs its runtime stack
+      # present. The harness does not pull these in on its own.
+      - run: >
+          pip install pytest-homeassistant-custom-component
+          aiousbwatcher pyserial usb-devices
+          bluetooth-adapters habluetooth bleak bleak-retry-connector
       # Run from inside tests_ha so its own pytest.ini applies. The root config
       # disables the Home Assistant plugin, which these tests require.
       - run: python -m pytest . -v

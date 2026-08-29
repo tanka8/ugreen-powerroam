@@ -32,6 +32,34 @@ WS_RELOGIN_AFTER_FAILURES = 3
 WS_BACKOFF_START = 5
 WS_BACKOFF_MAX = 60
 
+# Transport selection. The cloud path is the original one; "ble" talks to the
+# unit directly over Bluetooth LE and needs no account, no internet and no
+# WiFi - see protocol.py for the wire format.
+CONF_TRANSPORT = "transport"
+CONF_ADDRESS = "address"
+TRANSPORT_CLOUD = "cloud"
+TRANSPORT_BLE = "ble"
+
+# BLE GATT layout, read off a real GS1200 rather than assumed. Note the service
+# is NOT advertised - only 0000FFFF-style vendor data is - so discovery matches
+# on the local name instead. ABF1 declares "write" (with response), not
+# write-without-response as the app bundle suggested.
+BLE_SERVICE_UUID = "0000abf0-0000-1000-8000-00805f9b34fb"
+BLE_WRITE_UUID = "0000abf1-0000-1000-8000-00805f9b34fb"
+BLE_NOTIFY_UUID = "0000abf2-0000-1000-8000-00805f9b34fb"
+
+# Observed local name is "ugreen gs1200"; matched case-insensitively and by
+# prefix so sibling models are picked up too.
+BLE_NAME_PREFIX = "ugreen"
+
+# The device pushes its whole status set roughly every 0.6s, which is far more
+# often than any dashboard needs. State is coalesced and written to HA at most
+# this often; a genuine change to a switch still lands immediately.
+BLE_STATE_DEBOUNCE = 2.0
+
+BLE_RECONNECT_BACKOFF_START = 5
+BLE_RECONNECT_BACKOFF_MAX = 300
+
 CONF_TOKEN = "token"
 CONF_USER_ID = "user_id"
 CONF_DEVICE_NAME = "device_name"
@@ -150,7 +178,43 @@ SENSORS = {
         "mdi:alert-circle-outline",
     ),
     "work_mode": ("Work Mode (raw)", None, None, None, "diagnostic", "mdi:cog-outline"),
+    **{
+        f"cell_voltage_{n}": (
+            f"Cell {n} Voltage",
+            "mV",
+            "voltage",
+            "measurement",
+            "diagnostic",
+            "mdi:battery-outline",
+        )
+        for n in range(1, 8)
+    },
 }
+
+# Which sensors each transport can actually populate. Entities are only created
+# for keys their transport can fill, so neither setup carries a permanently
+# unavailable entity. Anything absent from a transport's set is simply not
+# offered there.
+BLE_SENSORS = {
+    "battery_percentage",
+    "charge_remain_time",
+    "discharge_remain_time",
+    "discharge_pow",
+    "ac_discharge_pow",
+    "car_discharge_pow",
+    "usb_discharge_pow",
+    "charge_power_all",
+    "work_mode",
+    "bat_temp1",
+    "bat_temp2",
+    "inverter_temp1",
+    "inverter_temp2",
+    *(f"cell_voltage_{n}" for n in range(1, 8)),
+}
+
+# Per-cell voltages have no cloud equivalent - the WebSocket never reports them.
+# They are one of the things local Bluetooth buys you.
+BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)}
 
 # Raw values for these keys come from the API in seconds. native stays in
 # seconds (so history/statistics don't break); suggested_unit_of_measurement

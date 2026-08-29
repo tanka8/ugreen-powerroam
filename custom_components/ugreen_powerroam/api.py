@@ -89,6 +89,11 @@ class UgreenApiClient:
         self._email: str | None = None
         self._password: str | None = None
 
+    @property
+    def unique_id_base(self) -> str:
+        """Stable prefix for entity unique_ids, shared with the BLE transport."""
+        return self.sn or self.device_name or ""
+
     def _headers(self) -> dict[str, str]:
         return {
             "wl-lang": "en",
