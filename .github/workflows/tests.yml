@@ -21,8 +21,8 @@ jobs:
       # aiohttp and cryptography are Home Assistant dependencies rather than ours,
       # but the tests import the api module directly, so they are needed here.
       - run: pip install pytest aiohttp cryptography ruff
-      - run: python -m ruff check custom_components/ tests/ tests_ha/
-      - run: python -m ruff format --check custom_components/ tests/ tests_ha/
+      - run: python -m ruff check custom_components/ tests/ tests_ha/ scripts/
+      - run: python -m ruff format --check custom_components/ tests/ tests_ha/ scripts/
       - run: python -m pytest tests/ -v
 
   config-flow-tests:
