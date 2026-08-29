@@ -204,12 +204,48 @@ reported in.
 
 ## Contributing
 
-If you want to add one of the settings above, or confirm a model other than the
-1200W: capture the app's own traffic the same way this was built - proxy it (e.g.
-mitmproxy) through a system-trusted CA and toggle the control in question, then open
-a pull request with what the `map` key and value turned out to be. No live device
-access is needed to review the change - it's a one-line addition to `const.py`
-either way.
+**Before you spend time on anything here, read this: I make no guarantee to merge
+your change, to add anything you ask for, or to keep any of it working.** I might
+merge a pull request the day it arrives, or leave it open indefinitely, or decide
+the integration should not grow that feature at all. None of that is a judgement
+on the work - it is a hobby project in my house and I will not always have the
+time or interest. Open the PR if you want to, but open it on the understanding
+that it may sit there. Forking costs you nothing and owes you nothing.
+
+With that said, two things would genuinely help.
+
+### Confirming another model
+
+Everything here was worked out from a PowerRoam 1200W. If you have a different
+one, the quickest way to find out what it does is over Bluetooth - no account, no
+proxy, no patched APK:
+
+```bash
+pip install bleak
+python scripts/hardware_check.py
+```
+
+It only reads. It scans, dumps the GATT tree, listens to whatever your unit
+pushes, asks for the serial and version, and prints a report. Add `--flashlight`
+and it will also blink the light, which proves the write path without touching
+anything that might have a load on it. It cannot switch an AC, DC or USB output,
+and it does not go near the firmware update path.
+
+The useful part of that report is the **UNKNOWN opcodes** list - things your model
+sends that this integration does not recognise - and whether the switch block is
+the same length. Paste the whole thing into an issue.
+
+> If your unit reports a **different length switch block**, do not write switches
+> on it until the layout is understood. The 1200W already uses two different field
+> layouts for that one opcode and getting it wrong silently changes settings you
+> did not touch - see [the `0x16` section](#bluetooth) for what that looks like.
+
+### Adding one of the settings above
+
+Those need the cloud side, which means capturing the app's own traffic: proxy it
+(e.g. mitmproxy) through a system-trusted CA, toggle the control in question, and
+report what the `map` key and value turned out to be. No live device access is
+needed to review that - it is a one-line addition to `const.py`.
 
 ## Tests
 

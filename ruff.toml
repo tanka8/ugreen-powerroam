@@ -23,3 +23,6 @@ ignore = [
 
 [lint.per-file-ignores]
 "tests/*" = ["T20"]
+# scripts/ holds standalone command line tools for people with hardware to
+# test against. Printing a report is the whole point of them.
+"scripts/*" = ["T20"]
