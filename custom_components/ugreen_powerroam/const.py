@@ -192,6 +192,10 @@ BLE_SENSORS = {
     "usb_discharge_pow",
     "charge_power_all",
     "work_mode",
+    "bat_temp1",
+    "bat_temp2",
+    "inverter_temp1",
+    "inverter_temp2",
     *(f"cell_voltage_{n}" for n in range(1, 8)),
 }
 

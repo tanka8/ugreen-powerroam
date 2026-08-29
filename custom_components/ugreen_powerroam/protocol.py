@@ -270,18 +270,20 @@ def encode_light(level: int) -> bytes:
 CELL_VOLTAGE_COUNT = 7
 CELL_VOLTAGE_OFFSET = 2
 
+# 0x04 carries four temperatures, offset by 40. The app calls them
+# batteriesOne/TwoPower and inverterOne/TwoPower, which is misleading: on an
+# idle unit drawing no measurable power they read 64/68/71/70, so they are not
+# watts. Confirmed against this integration's own cloud transport, which was
+# reporting 24/28/31/30 C for the matching sensors at the same moment - an
+# exact +40 on all four channels, held across two capture sessions and half an
+# hour of recorder history. Negative results are left as-is; sub-zero storage
+# temperatures are legitimate.
+TEMPERATURE_OFFSET = 40
+
+TEMPERATURE_KEYS = ("bat_temp1", "bat_temp2", "inverter_temp1", "inverter_temp2")
+
 # Not mapped, on purpose:
 #
-#   0x04  Four uint16s the app calls batteriesOne/TwoPower and
-#         inverterOne/TwoPower. Observed 64/68/71/70 on an idle unit drawing
-#         no measurable power, so they are not watts. The name pattern lines
-#         up exactly with the cloud's bat_temp1/bat_temp2/inverter_temp1/
-#         inverter_temp2, the inverter pair reads hotter than the battery
-#         pair, and subtracting 40 gives a believable 24/28/31/30 C - but
-#         that offset is a hypothesis, not a measurement. Publishing a
-#         "Battery Temperature: 64 C" sensor on a guess would be worse than
-#         publishing nothing. Verify against the cloud integration's own
-#         temperature sensors, then map it here.
 #   0x01  Eight fault bytes, all zero on a healthy unit. No decoded layout,
 #         so there is nothing trustworthy to map onto device_fault2 yet.
 #   0x06  Version block, 24 bytes, structure unknown.
@@ -304,7 +306,14 @@ def telemetry_from_frame(frame: Frame) -> dict[str, int | bool]:
     data = frame.data
     out: dict[str, int | bool] = {}
 
-    if frame.cmd == OP_BATTERY:
+    if frame.cmd == OP_TEMPS:
+        for index, key in enumerate(TEMPERATURE_KEYS):
+            raw = u16(data, index * 2)
+            if raw is None:
+                break
+            out[key] = raw - TEMPERATURE_OFFSET
+
+    elif frame.cmd == OP_BATTERY:
         if len(data) > 23:
             out["battery_percentage"] = data[23]
         charge = u16(data, 19)

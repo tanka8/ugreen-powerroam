@@ -167,12 +167,28 @@ class TestTelemetry:
         (frame,) = protocol.decode_frames(protocol.encode(protocol.OP_BATTERY, b"\x01"))
         assert protocol.telemetry_from_frame(frame) == {}
 
-    def test_unmapped_opcode_is_empty(self) -> None:
-        """0x04 is deliberately not mapped - its units are unconfirmed."""
+    def test_temperatures_are_offset_by_forty(self) -> None:
+        """Verified against the cloud transport reading the same device.
+
+        BLE reported 64/68/71/70 while the cloud reported 24/28/31/30 C for
+        the matching sensors, an exact +40 across all four channels.
+        """
         (frame,) = protocol.decode_frames(
             protocol.encode(protocol.OP_TEMPS, bytes.fromhex("4000440047004600"))
         )
-        assert protocol.telemetry_from_frame(frame) == {}
+        assert protocol.telemetry_from_frame(frame) == {
+            "bat_temp1": 24,
+            "bat_temp2": 28,
+            "inverter_temp1": 31,
+            "inverter_temp2": 30,
+        }
+
+    def test_sub_zero_temperatures_survive(self) -> None:
+        """Cold storage is legitimate; the offset must not clamp at zero."""
+        (frame,) = protocol.decode_frames(
+            protocol.encode(protocol.OP_TEMPS, bytes.fromhex("2500250025002500"))
+        )
+        assert protocol.telemetry_from_frame(frame)["bat_temp1"] == -3
 
 
 def test_parse_serial_both_forms() -> None:

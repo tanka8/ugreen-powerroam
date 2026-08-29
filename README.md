@@ -81,9 +81,10 @@ protocol either does not carry or does not carry in a confirmed form.
 | Battery %, charge/discharge time remaining | yes | yes |
 | Total / AC / DC / USB power, input power | yes | yes |
 | Work mode | yes | yes |
+| Battery and inverter temperatures | yes | yes |
 | Cell 1-7 voltage | **yes** | no |
 | Battery health, cycle count, capacity remaining | no | yes |
-| AC/DC voltages, temperatures, fault code | no | yes |
+| AC/DC voltages, fault code | no | yes |
 
 State is **pushed** on both transports - about every 0.6 seconds over Bluetooth (then
 coalesced, so Home Assistant is not woken 1.6 times a second), and roughly every 15
@@ -169,15 +170,6 @@ reported in.
 
 ## Known gaps
 
-* **Four Bluetooth values are captured but not published.** Opcode `0x04` carries
-  what the app calls `batteriesOne/TwoPower` and `inverterOne/TwoPower`. On an idle
-  unit drawing no measurable power they read 64/68/71/70, so they are not watts. The
-  naming lines up exactly with the cloud's two battery and two inverter temperature
-  sensors, the inverter pair reads hotter than the battery pair, and subtracting 40
-  gives a believable 24/28/31/30 C - but that offset is a hypothesis, not a
-  measurement, and shipping a "Battery Temperature: 64 C" sensor on a guess is worse
-  than shipping nothing. Run both transports against one device, compare, and it is a
-  few lines in `protocol.py` to enable.
 * **The Bluetooth fault code is not mapped.** Opcode `0x01` carries eight fault bytes,
   all zero on a healthy unit, with no decoded layout - so there is nothing trustworthy
   to put behind the cloud's `device_fault2` yet.
