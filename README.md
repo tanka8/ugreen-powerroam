@@ -6,17 +6,36 @@
 Home Assistant integration for UGREEN power stations that use the **UGREEN app**
 (`com.powerroam.pps`). Reverse engineered against a **PowerRoam 1200W**.
 
+Two transports, your choice at setup:
+
+* **Bluetooth (recommended)** - talks to the unit directly. No account, no internet,
+  no WiFi. State arrives in under a second.
+* **Cloud** - UGREEN's own API. Needs an account and a working internet connection,
+  and updates roughly every 15 seconds.
+
 > **Tested on one model, one account.** Everything here was worked out from a
 > PowerRoam 1200W. Other PowerRoam models almost certainly share the same cloud API
 > and field names, but that is an assumption, not a confirmation - see
 > [Known gaps](#known-gaps).
 
-## Why it is cloud-based
+## Why Bluetooth, and why the cloud came first
 
-The device has **no local control path at all**. A full TCP port scan of all 65535
-ports found nothing open - it only holds an outbound WiFi connection to UGREEN's own
-cloud (`hw-powerapi.ugpps.com`), not a Tuya-style local API. `tuya-local`, LocalTuya
-and friends are irrelevant here: this is UGREEN's own stack.
+Over **IP** the device has no local control path at all. A full TCP port scan of all
+65535 ports found nothing open - it only holds an outbound WiFi connection to UGREEN's
+own cloud (`hw-powerapi.ugpps.com`), not a Tuya-style local API. `tuya-local`,
+LocalTuya and friends are irrelevant here: this is UGREEN's own stack. That is why the
+first version of this integration was cloud-only.
+
+Over **Bluetooth** it is a different story. The app carries a complete parallel BLE
+transport that it uses whenever there is no WiFi, and the power station runs an open
+GATT server to serve it - no pairing, no bonding, no encryption. That transport has
+since been confirmed against real hardware: 4,502 frames decoded with zero CRC
+failures, and the device pushes its entire status set unprompted about every 0.6
+seconds, roughly 24x faster than the cloud.
+
+So Bluetooth is the better path in every respect except range. The cloud transport is
+still there if you want to reach the unit from outside Bluetooth range, or if you have
+no adapter near it.
 
 Getting a proxy in front of the app's traffic also wasn't the usual "trust a CA on an
 emulator" story: the app ships **ARM64-only** native libraries, and the emulator
@@ -51,7 +70,24 @@ debug key.
 Entities are only created for the fields this integration knows about - see
 [Known gaps](#known-gaps) for what the device reports but isn't exposed yet.
 
-State is **pushed** roughly every 15 seconds over a plain WebSocket. Nothing polls.
+Only the entities a transport can actually fill are created, so neither setup is left
+with a column of permanently unavailable entities. Bluetooth adds per-cell voltages;
+the cloud adds the temperature, voltage, battery-health and fault sensors that the BLE
+protocol either does not carry or does not carry in a confirmed form.
+
+| | Bluetooth | Cloud |
+|---|---|---|
+| All four switches | yes | yes |
+| Battery %, charge/discharge time remaining | yes | yes |
+| Total / AC / DC / USB power, input power | yes | yes |
+| Work mode | yes | yes |
+| Cell 1-7 voltage | **yes** | no |
+| Battery health, cycle count, capacity remaining | no | yes |
+| AC/DC voltages, temperatures, fault code | no | yes |
+
+State is **pushed** on both transports - about every 0.6 seconds over Bluetooth (then
+coalesced, so Home Assistant is not woken 1.6 times a second), and roughly every 15
+seconds over the cloud WebSocket. Nothing polls.
 
 ## Install
 
@@ -62,8 +98,25 @@ restart.
 **Manually** - copy `custom_components/ugreen_powerroam/` into your
 `config/custom_components/` and restart.
 
-Then **Settings, Devices & services, Add integration, UGREEN PowerRoam**, and sign in
-with your UGREEN app account.
+Then **Settings, Devices & services, Add integration, UGREEN PowerRoam**, and pick a
+transport.
+
+If Home Assistant can already see the power station over Bluetooth it will usually
+offer it to you unprompted, without your having to add anything by hand.
+
+**For Bluetooth** you need a Bluetooth adapter within range of the unit and the
+`bluetooth` integration set up. **Close the UGREEN phone app first** - the power
+station accepts only one Bluetooth connection at a time, so the app and Home Assistant
+cannot both hold it.
+
+Setup reads the unit's serial number over BLE and uses it as the entry's identity,
+which is the same identity the cloud entry uses. That means **you can migrate from
+cloud to Bluetooth and keep your entity history**: remove the cloud entry, add the
+Bluetooth one, and the entities reattach. It also means the two cannot be configured
+side by side for one device, which is deliberate - two entries for one power station
+would give you two of every entity.
+
+**For the cloud** sign in with your UGREEN app account.
 
 ## How it works
 
@@ -86,8 +139,55 @@ Two calls set up the session, one drives control, one carries live state:
   one flat JSON object per update with every field the device reports - no envelope,
   no per-field diffing.
 
+### Bluetooth
+
+The wire format lives in `protocol.py`, which is pure Python and fully unit tested
+without hardware. Frames look like this:
+
+```
+5A A5 | A1 C0 | cmd | len (uint16 LE) | data | crc (uint16 LE)
+```
+
+CRC is Modbus CRC-16. The `A1 C0` field is direction: everything the device sends
+back carries it byte-swapped as `C0 A1`. GATT service `ABF0` exposes `ABF1` to write
+to and `ABF2` to subscribe to - and note the service is **not advertised**, so
+discovery matches on the local name (`ugreen gs1200`) instead.
+
+**The one trap worth knowing about**, because it bites hard: the app uses **two
+different field layouts for the same `0x16` switch opcode**. What the device reports
+has 12 fields; what you write has 11, with no slot for `lowBatteryWarning`. Echo a
+received payload straight back as a write and every field after the first lands one
+position early. Doing exactly that during development silently switched battery
+preserving mode off on a real unit. `protocol.py` keeps the two layouts strictly
+apart and only ever converts through named fields, and there are regression tests
+pinning it.
+
+`0x16` is also a whole-state replace rather than a patch, so a write has to know the
+current state of all eleven fields. `encode_switch_state()` refuses to build a frame
+from a partial state, and the BLE transport refuses to send one before the device has
+reported in.
+
 ## Known gaps
 
+* **Four Bluetooth values are captured but not published.** Opcode `0x04` carries
+  what the app calls `batteriesOne/TwoPower` and `inverterOne/TwoPower`. On an idle
+  unit drawing no measurable power they read 64/68/71/70, so they are not watts. The
+  naming lines up exactly with the cloud's two battery and two inverter temperature
+  sensors, the inverter pair reads hotter than the battery pair, and subtracting 40
+  gives a believable 24/28/31/30 C - but that offset is a hypothesis, not a
+  measurement, and shipping a "Battery Temperature: 64 C" sensor on a guess is worse
+  than shipping nothing. Run both transports against one device, compare, and it is a
+  few lines in `protocol.py` to enable.
+* **The Bluetooth fault code is not mapped.** Opcode `0x01` carries eight fault bytes,
+  all zero on a healthy unit, with no decoded layout - so there is nothing trustworthy
+  to put behind the cloud's `device_fault2` yet.
+* **Whether the BLE serial matches the cloud serial is unverified.** The migration
+  path above assumes it does. If it turns out not to, Bluetooth and cloud entries
+  will simply coexist as separate devices rather than merging.
+* **Cell voltages assume a 7-cell pack.** Seven consecutive uint16s reading 3276-3280
+  identify them about as conclusively as an observation can, but the offsets came from
+  reading the bytes, not from the app - its own handler ignores them. A different pack
+  size would need the count adjusting.
 * **U-Turbo is not implemented.** It showed up in the app but never got exercised
   during capture, so which `map` key it sets is unconfirmed - guessing wrong here
   risks writing to the wrong field. If you can capture it (see
@@ -126,8 +226,12 @@ pip install pytest aiohttp cryptography
 python -m pytest -v
 ```
 
-`tests/` runs the pure-Python parts - the telemetry frame parser and the RSA
-encryption used at login - against a synthetic sample frame
+`tests/` runs the pure-Python parts - the BLE codec, the telemetry frame parser and
+the RSA encryption used at login - with no network, no hardware and no Home
+Assistant. The BLE tests run against byte strings captured from a real PowerRoam, so
+they are regression tests against the device rather than against the reverse
+engineered app bundle alone. The cloud parser is tested against a synthetic sample
+frame
 (`docs/sample_telemetry_frame.json`, shaped like a real capture but with fictional
 device identifiers), with no network, no Home Assistant, and no credentials.
 
@@ -141,9 +245,10 @@ the HACS validation action.
 
 ## How this was built, and what to expect from it
 
-Most of the work here - reverse engineering the protocol from a proxied capture of
-the UGREEN app, writing the integration and its tests, and this README - was done by
-**Claude**, Anthropic's AI assistant. I directed it, made the calls it asked me to
+Most of the work here - reverse engineering the cloud protocol from a proxied capture
+of the UGREEN app, decoding the Bluetooth protocol from the app bundle and confirming
+it frame by frame against real hardware, writing the integration and its tests, and
+this README - was done by **Claude**, Anthropic's AI assistant. I directed it, made the calls it asked me to
 make, tested against my own device, and I run the result at home. I am not presenting
 it as my own unaided work.
 

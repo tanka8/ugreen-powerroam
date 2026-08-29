@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SENSORS, SUGGESTED_HOURS
+from .const import BLE_SENSORS, DOMAIN, SENSORS, SUGGESTED_HOURS, TRANSPORT_BLE
 
 
 async def async_setup_entry(
@@ -18,7 +18,10 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     api, hub = data["api"], data["hub"]
 
-    async_add_entities(UgreenSensor(api, hub, key) for key in SENSORS)
+    # Only offer sensors this transport can actually populate, so neither setup
+    # is left with permanently unavailable entities.
+    keys = SENSORS if data["transport"] != TRANSPORT_BLE else BLE_SENSORS
+    async_add_entities(UgreenSensor(api, hub, key) for key in SENSORS if key in keys)
 
 
 class UgreenSensor(SensorEntity):
@@ -44,9 +47,9 @@ class UgreenSensor(SensorEntity):
             # from before the unit was seconds - that entry has "s" baked
             # into its cached suggested_unit_of_measurement.
             unique_key = f"{key}_v2"
-        self._attr_unique_id = f"{api.sn or api.device_name}_{unique_key}"
+        self._attr_unique_id = f"{api.unique_id_base}_{unique_key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, api.sn or api.device_name)},
+            identifiers={(DOMAIN, api.unique_id_base)},
             name="UGREEN PowerRoam",
             manufacturer="UGREEN",
             model=api.device_name,

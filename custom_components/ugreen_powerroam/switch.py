@@ -28,9 +28,9 @@ class UgreenSwitch(SwitchEntity):
         self._hub = hub
         self._key = key
         self._attr_name = SWITCHES[key]
-        self._attr_unique_id = f"{api.sn or api.device_name}_{key}"
+        self._attr_unique_id = f"{api.unique_id_base}_{key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, api.sn or api.device_name)},
+            identifiers={(DOMAIN, api.unique_id_base)},
             name="UGREEN PowerRoam",
             manufacturer="UGREEN",
             model=api.device_name,
