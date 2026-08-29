@@ -94,6 +94,16 @@ class UgreenBleDevice:
         self._notify_handle: asyncio.TimerHandle | None = None
 
     @property
+    def available(self) -> bool:
+        """Whether the data in .data is live rather than left over.
+
+        Without this the entities keep serving whatever the last connection
+        saw, indefinitely and while still looking healthy - which is the same
+        silent staleness the cloud transport used to suffer from.
+        """
+        return self._client is not None and self._client.is_connected
+
+    @property
     def unique_id_base(self) -> str:
         """Stable prefix for entity unique_ids, shared with the cloud client."""
         return self._unique_id_base

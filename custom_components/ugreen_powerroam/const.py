@@ -209,6 +209,9 @@ BLE_SENSORS = {
     "bat_temp2",
     "inverter_temp1",
     "inverter_temp2",
+    "bat_health",
+    "bat_cycle_num",
+    "bat_cap_remain",
     *(f"cell_voltage_{n}" for n in range(1, 8)),
 }
 

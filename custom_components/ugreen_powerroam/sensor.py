@@ -62,7 +62,7 @@ class UgreenSensor(SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._key in self._hub.data
+        return self._hub.available and self._key in self._hub.data
 
     async def async_added_to_hass(self) -> None:
         self._remove_listener = self._hub.add_listener(self.async_write_ha_state)
