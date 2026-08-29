@@ -286,11 +286,11 @@ TEMPERATURE_KEYS = ("bat_temp1", "bat_temp2", "inverter_temp1", "inverter_temp2"
 #
 #   0x01  Eight fault bytes, all zero on a healthy unit. Nothing to correlate
 #         against while nothing is wrong, so device_fault2 stays unmapped.
-#   AC and DC voltages. 0x0B carries eight bytes of which only acPower at
-#         offset 6 is known, and 0x0C carries four bytes past the port powers.
-#         Every capture so far was taken with the outputs off, so those bytes
-#         were all zero and could not be told apart from padding. Mapping them
-#         needs a capture with AC actually running - see the README.
+#   AC and DC voltages. Not missing - absent. Captured with a real 17W AC load
+#         running, 0x0B bytes 0-5 are still zero and the whole of 0x0C is zero.
+#         The cloud transport reports 0.0 for the same three sensors across
+#         their entire recorded history on this model, including while charging
+#         from mains, so the device simply does not publish them anywhere.
 #   0x06  Version block, 24 bytes, structure unknown.
 #   0x17  Timer block. Left alone.
 #   0x10/0x11/0x14/0x15  Screen brightness, screen timeout, DC charge current

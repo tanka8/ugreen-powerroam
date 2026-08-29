@@ -84,7 +84,7 @@ protocol either does not carry or does not carry in a confirmed form.
 | Battery and inverter temperatures | yes | yes |
 | Battery health, cycle count, capacity remaining | yes | yes |
 | Cell 1-7 voltage | **yes** | no |
-| AC/DC voltages, fault code | no | yes |
+| AC/DC voltages, fault code | no | reports nothing - see below |
 
 State is **pushed** on both transports - about every 0.6 seconds over Bluetooth (then
 coalesced, so Home Assistant is not woken 1.6 times a second), and roughly every 15
@@ -177,30 +177,21 @@ reported in.
 
 ## Known gaps
 
-* **Four values are still cloud-only over Bluetooth**: the AC input and output
-  voltages, the DC voltage, and the fault code. The bytes are almost certainly
-  there - `0x0B` carries eight bytes of which only one field is known, and `0x0C`
-  has four spare past the port powers - but every capture so far was taken with
-  the outputs off and nothing faulted, so those bytes were all zero and could not
-  be told apart from padding. Mapping them needs a capture taken with AC actually
-  running. Either `scripts/hardware_check.py`, or ask a running integration for
-  them by adding this to `configuration.yaml`:
+* **The AC/DC voltage sensors and the fault code never report anything**, on
+  either transport, at least on the 1200W this was built against. Every value
+  they have ever produced is `0.0` (or empty, for the fault code), including
+  while the unit was charging from mains with the inverter clearly working -
+  which is exactly when an AC input voltage should have shown up.
 
-  ```yaml
-  logger:
-    logs:
-      custom_components.ugreen_powerroam.frames: debug
-  ```
+  Over Bluetooth the corresponding bytes are flat zero too: `0x0B` bytes 0-5
+  stay zero with a real AC load drawing 17W, and the whole of `0x0C` reads zero.
+  So there is nothing to map, rather than something waiting to be decoded.
 
-  That logs each opcode's payload whenever it changes, so you can switch a load
-  on and watch which bytes move.
-* **Whether the BLE serial matches the cloud serial is unverified.** The migration
-  path above assumes it does. If it turns out not to, Bluetooth and cloud entries
-  will simply coexist as separate devices rather than merging.
-* **Cell voltages assume a 7-cell pack.** Seven consecutive uint16s reading 3276-3280
-  identify them about as conclusively as an observation can, but the offsets came from
-  reading the bytes, not from the app - its own handler ignores them. A different pack
-  size would need the count adjusting.
+  They are left in place on the cloud path because another model may well fill
+  them in, and removing them would break anyone whose does. But do not expect
+  them to work here, and do not read `0.0` as "the AC output is at zero volts" -
+  read it as "this device never told anyone".
+
 * **U-Turbo is not implemented.** It showed up in the app but never got exercised
   during capture, so which `map` key it sets is unconfirmed - guessing wrong here
   risks writing to the wrong field. If you can capture it (see
