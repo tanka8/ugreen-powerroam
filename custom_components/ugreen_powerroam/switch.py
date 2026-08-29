@@ -44,7 +44,7 @@ class UgreenSwitch(SwitchEntity):
 
     @property
     def available(self) -> bool:
-        return self._key in self._hub.data
+        return self._hub.available and self._key in self._hub.data
 
     async def async_turn_on(self, **kwargs) -> None:
         await self._api.set_device_info(self._key, 1)

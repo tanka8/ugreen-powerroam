@@ -189,6 +189,13 @@ class UgreenTelemetryHub:
         self._listeners: list[Callable[[], None]] = []
         self._task: asyncio.Task | None = None
         self._stopped = False
+        self._connected = False
+
+    @property
+    def available(self) -> bool:
+        """Whether the socket is up, so entities go unavailable instead of
+        quietly serving an hour-old reading."""
+        return self._connected
 
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
@@ -270,6 +277,8 @@ class UgreenTelemetryHub:
                     )
 
             keepalive_task = asyncio.create_task(_keepalive())
+            self._connected = True
+            self._notify()
             try:
                 while True:
                     # Reading with a deadline is what makes a half-open socket
@@ -299,3 +308,5 @@ class UgreenTelemetryHub:
                         self._notify()
             finally:
                 keepalive_task.cancel()
+                self._connected = False
+                self._notify()

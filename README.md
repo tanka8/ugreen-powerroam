@@ -82,8 +82,8 @@ protocol either does not carry or does not carry in a confirmed form.
 | Total / AC / DC / USB power, input power | yes | yes |
 | Work mode | yes | yes |
 | Battery and inverter temperatures | yes | yes |
+| Battery health, cycle count, capacity remaining | yes | yes |
 | Cell 1-7 voltage | **yes** | no |
-| Battery health, cycle count, capacity remaining | no | yes |
 | AC/DC voltages, fault code | no | yes |
 
 State is **pushed** on both transports - about every 0.6 seconds over Bluetooth (then
@@ -177,9 +177,23 @@ reported in.
 
 ## Known gaps
 
-* **The Bluetooth fault code is not mapped.** Opcode `0x01` carries eight fault bytes,
-  all zero on a healthy unit, with no decoded layout - so there is nothing trustworthy
-  to put behind the cloud's `device_fault2` yet.
+* **Four values are still cloud-only over Bluetooth**: the AC input and output
+  voltages, the DC voltage, and the fault code. The bytes are almost certainly
+  there - `0x0B` carries eight bytes of which only one field is known, and `0x0C`
+  has four spare past the port powers - but every capture so far was taken with
+  the outputs off and nothing faulted, so those bytes were all zero and could not
+  be told apart from padding. Mapping them needs a capture taken with AC actually
+  running. Either `scripts/hardware_check.py`, or ask a running integration for
+  them by adding this to `configuration.yaml`:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.ugreen_powerroam.frames: debug
+  ```
+
+  That logs each opcode's payload whenever it changes, so you can switch a load
+  on and watch which bytes move.
 * **Whether the BLE serial matches the cloud serial is unverified.** The migration
   path above assumes it does. If it turns out not to, Bluetooth and cloud entries
   will simply coexist as separate devices rather than merging.

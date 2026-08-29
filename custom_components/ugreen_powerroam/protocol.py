@@ -284,8 +284,13 @@ TEMPERATURE_KEYS = ("bat_temp1", "bat_temp2", "inverter_temp1", "inverter_temp2"
 
 # Not mapped, on purpose:
 #
-#   0x01  Eight fault bytes, all zero on a healthy unit. No decoded layout,
-#         so there is nothing trustworthy to map onto device_fault2 yet.
+#   0x01  Eight fault bytes, all zero on a healthy unit. Nothing to correlate
+#         against while nothing is wrong, so device_fault2 stays unmapped.
+#   AC and DC voltages. 0x0B carries eight bytes of which only acPower at
+#         offset 6 is known, and 0x0C carries four bytes past the port powers.
+#         Every capture so far was taken with the outputs off, so those bytes
+#         were all zero and could not be told apart from padding. Mapping them
+#         needs a capture with AC actually running - see the README.
 #   0x06  Version block, 24 bytes, structure unknown.
 #   0x17  Timer block. Left alone.
 #   0x10/0x11/0x14/0x15  Screen brightness, screen timeout, DC charge current
@@ -316,6 +321,18 @@ def telemetry_from_frame(frame: Frame) -> dict[str, int | bool]:
     elif frame.cmd == OP_BATTERY:
         if len(data) > 23:
             out["battery_percentage"] = data[23]
+        # Confirmed against the cloud transport reading the same device: at
+        # 09:03 BLE gave 100 / 55 / 35100 for these three while the recorder
+        # held battery_health=100, battery_cycle_count=55 and
+        # battery_capacity_remaining=35100. All 321 frames in that window
+        # agreed, and a 16-bit value landing exactly on 35100 is not chance.
+        if len(data) > 16:
+            out["bat_health"] = data[16]
+        if len(data) > 17:
+            out["bat_cycle_num"] = data[17]
+        capacity = u16(data, 24)
+        if capacity is not None:
+            out["bat_cap_remain"] = capacity
         charge = u16(data, 19)
         discharge = u16(data, 21)
         if charge is not None:

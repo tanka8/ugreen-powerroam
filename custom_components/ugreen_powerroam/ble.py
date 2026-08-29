@@ -39,6 +39,18 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Raw frames on their own logger, so they can be turned on without drowning in
+# everything else this module says:
+#
+#   logger:
+#     logs:
+#       custom_components.ugreen_powerroam.frames: debug
+#
+# Only changed payloads are logged, not all ~22 frames a second, which keeps
+# this usable for working out what an unmapped byte means - plug a load in,
+# watch which bytes move.
+_FRAME_LOGGER = logging.getLogger(f"{__package__}.frames")
+
 # Which switch entity key maps onto which field of the 0x16 switch block.
 SWITCH_KEY_TO_FIELD = {
     "switch_ac": "ac",
@@ -92,6 +104,17 @@ class UgreenBleDevice:
         self._disconnected = asyncio.Event()
         self._stopped = False
         self._notify_handle: asyncio.TimerHandle | None = None
+        self._last_payloads: dict[int, str] = {}
+
+    @property
+    def available(self) -> bool:
+        """Whether the data in .data is live rather than left over.
+
+        Without this the entities keep serving whatever the last connection
+        saw, indefinitely and while still looking healthy - which is the same
+        silent staleness the cloud transport used to suffer from.
+        """
+        return self._client is not None and self._client.is_connected
 
     @property
     def unique_id_base(self) -> str:
@@ -259,6 +282,14 @@ class UgreenBleDevice:
             if not frame.crc_ok:
                 _LOGGER.debug("dropping BLE frame with bad CRC: %s", frame.raw.hex())
                 continue
+            if _FRAME_LOGGER.isEnabledFor(logging.DEBUG):
+                payload = frame.data.hex()
+                if self._last_payloads.get(frame.cmd) != payload:
+                    self._last_payloads[frame.cmd] = payload
+                    _FRAME_LOGGER.debug(
+                        "0x%02x len=%d %s", frame.cmd, len(frame.data), payload
+                    )
+
             if frame.cmd == protocol.OP_SWITCHES:
                 self._switch_state = protocol.decode_switch_state(frame.data)
             elif frame.cmd == protocol.CMD_GET_SERIAL and self.sn is None:

@@ -136,6 +136,21 @@ class TestTelemetry:
         # Seven cells, and no eighth invented from the bytes that follow.
         assert "cell_voltage_8" not in out
 
+    def test_battery_frame_carries_health_cycles_and_capacity(self) -> None:
+        """Verified against the cloud transport reading the same device.
+
+        At 09:03 this payload was on the wire while the recorder held
+        battery_health=100, battery_cycle_count=55 and
+        battery_capacity_remaining=35100. All 321 frames captured in that
+        window carried the same three values.
+        """
+        data = bytes.fromhex("0601cf0ccc0ccc0ccf0ccf0cce0ccf0c6437000000fd59581c890000")
+        (frame,) = protocol.decode_frames(protocol.encode(protocol.OP_BATTERY, data))
+        out = protocol.telemetry_from_frame(frame)
+        assert out["bat_health"] == 100
+        assert out["bat_cycle_num"] == 55
+        assert out["bat_cap_remain"] == 35100
+
     def test_switch_frame_maps_to_cloud_keys(self) -> None:
         (frame,) = protocol.decode_frames(
             protocol.encode(protocol.OP_SWITCHES, REAL_SWITCH_STATE)

@@ -120,8 +120,10 @@ def test_telemetry_is_stored_and_listeners_fire(monkeypatch):
         ]
     )
     hub = api.UgreenTelemetryHub(FakeApi(), FakeSession(ws))
-    fired = []
-    hub.add_listener(lambda: fired.append(1))
+    availability = []
+    hub.add_listener(lambda: availability.append(hub.available))
+
+    assert hub.available is False  # nothing connected yet
 
     async def scenario():
         with pytest.raises(api.UgreenApiError):
@@ -129,7 +131,12 @@ def test_telemetry_is_stored_and_listeners_fire(monkeypatch):
 
     asyncio.run(scenario())
     assert hub.data == {"battery_percentage": 42}
-    assert len(fired) == 1
+    # Listeners see the socket come up, the telemetry land, and the socket go
+    # away again - entities have to re-render on the availability edges too,
+    # not just when a value changes.
+    assert availability[0] is True
+    assert availability[-1] is False
+    assert hub.available is False
     # The subscribe frame must go out before anything is read.
     assert ws.sent[0]["content"] == "ugreenSocketConnection"
 
@@ -213,3 +220,30 @@ def test_successful_connection_resets_the_failure_count(monkeypatch):
 
     assert len(attempts) >= 12
     assert fake_api.relogin_calls == 0
+
+
+def test_entities_go_unavailable_when_the_socket_drops(monkeypatch):
+    """Stale data must not keep presenting itself as live.
+
+    This is the failure that made the original outage invisible: the hub kept
+    its last payload, every entity kept reporting `available`, and the values
+    were quietly an hour old.
+    """
+    monkeypatch.setattr(api, "WS_KEEPALIVE_INTERVAL", 3600)
+    ws = FakeWebSocket(
+        [
+            FakeMessage(aiohttp.WSMsgType.TEXT, '{"battery_percentage": 42}'),
+            FakeMessage(aiohttp.WSMsgType.CLOSE),
+        ]
+    )
+    hub = api.UgreenTelemetryHub(FakeApi(), FakeSession(ws))
+
+    async def scenario():
+        with pytest.raises(api.UgreenApiError):
+            await hub._connect_once()
+
+    asyncio.run(scenario())
+
+    # The data survives for the reconnect, but it is no longer presented as live.
+    assert hub.data == {"battery_percentage": 42}
+    assert hub.available is False
