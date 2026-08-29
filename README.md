@@ -194,10 +194,10 @@ reported in.
 * **`bat_cap_remain` and `work_mode` are raw, uncalibrated numbers.** Both are
   exposed for graphing/automations, but their scale and the meaning of each
   `work_mode` value weren't confirmed against a known reference during capture.
-* **Session tokens aren't refreshed automatically.** Login happens once at startup;
-  if the token expires mid-session, reload the integration or restart Home Assistant
-  to get a fresh one. `UgreenApiClient.relogin()` exists for this but isn't wired
-  into a reauth flow yet.
+* **There is still no reauth flow.** The telemetry loop now re-logs in by itself
+  after a few consecutive failures, so an expiring token no longer stops updates.
+  But if the stored credentials are genuinely wrong - a changed password, say -
+  nothing prompts you to fix them; the loop just keeps failing in the log.
 * **Single device per account assumed.** `device/list` is read once at setup and
   only the first device is used; multi-device accounts aren't handled.
 * Error messages are hardcoded English rather than translation keys.

@@ -19,6 +19,19 @@ WS_URL_TEMPLATE = (
 # message and a keepalive.
 WS_KEEPALIVE_INTERVAL = 25
 
+# Telemetry arrives about every 15s. If six consecutive updates fail to show
+# up the connection is treated as dead even though the socket still looks open
+# - a half-open WebSocket reads as healthy forever otherwise, which is exactly
+# how the cloud transport was observed to fail silently for an hour.
+WS_STALL_TIMEOUT = 90
+
+# Reconnecting with the same expired token will fail forever, so after this
+# many consecutive failures the client logs in again for a fresh one.
+WS_RELOGIN_AFTER_FAILURES = 3
+
+WS_BACKOFF_START = 5
+WS_BACKOFF_MAX = 60
+
 # Transport selection. The cloud path is the original one; "ble" talks to the
 # unit directly over Bluetooth LE and needs no account, no internet and no
 # WiFi - see protocol.py for the wire format.

@@ -26,7 +26,15 @@ from collections.abc import Callable
 
 import aiohttp
 
-from .const import API_BASE, WS_KEEPALIVE_INTERVAL, WS_URL_TEMPLATE
+from .const import (
+    API_BASE,
+    WS_BACKOFF_MAX,
+    WS_BACKOFF_START,
+    WS_KEEPALIVE_INTERVAL,
+    WS_RELOGIN_AFTER_FAILURES,
+    WS_STALL_TIMEOUT,
+    WS_URL_TEMPLATE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,19 +212,38 @@ class UgreenTelemetryHub:
             self._task.cancel()
 
     async def _run(self) -> None:
-        backoff = 5
+        backoff = WS_BACKOFF_START
+        failures = 0
         while not self._stopped:
             try:
                 await self._connect_once()
-                backoff = 5  # reset after a clean connection
+                backoff = WS_BACKOFF_START  # reset after a clean connection
+                failures = 0
             except asyncio.CancelledError:
                 raise
             except Exception as err:
-                _LOGGER.debug("UGREEN websocket loop error: %s", err)
+                failures += 1
+                _LOGGER.debug(
+                    "UGREEN websocket loop error (failure %s): %s", failures, err
+                )
+                # A stale token cannot be recovered by retrying with it, so
+                # after a few consecutive failures get a fresh one. Without
+                # this the loop retries a dead session indefinitely and the
+                # entities silently stop updating.
+                if failures >= WS_RELOGIN_AFTER_FAILURES:
+                    try:
+                        await self._api.relogin()
+                        _LOGGER.debug("UGREEN re-login succeeded, retrying socket")
+                        failures = 0
+                        backoff = WS_BACKOFF_START
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as relogin_err:
+                        _LOGGER.debug("UGREEN re-login failed: %s", relogin_err)
             if self._stopped:
                 return
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
+            backoff = min(backoff * 2, WS_BACKOFF_MAX)
 
     async def _connect_once(self) -> None:
         url = WS_URL_TEMPLATE.format(
@@ -224,6 +251,9 @@ class UgreenTelemetryHub:
         )
         headers = {"token": self._api.token or ""}
 
+        # heartbeat stays disabled: the server was never observed to answer
+        # protocol-level pings, so liveness is judged from telemetry instead,
+        # which is purely client-side and cannot upset it.
         async with self._session.ws_connect(url, headers=headers, heartbeat=None) as ws:
             await ws.send_json(
                 {"userId": self._api.user_id, "content": "ugreenSocketConnection"}
@@ -241,9 +271,28 @@ class UgreenTelemetryHub:
 
             keepalive_task = asyncio.create_task(_keepalive())
             try:
-                async for msg in ws:
+                while True:
+                    # Reading with a deadline is what makes a half-open socket
+                    # detectable: iterating the socket directly would block
+                    # here forever while the entities quietly went stale.
+                    try:
+                        async with asyncio.timeout(WS_STALL_TIMEOUT):
+                            msg = await ws.receive()
+                    except TimeoutError as err:
+                        raise UgreenApiError(
+                            f"no telemetry for {WS_STALL_TIMEOUT}s, reconnecting"
+                        ) from err
+
+                    if msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        raise UgreenApiError(f"websocket closed: {msg.type.name}")
                     if msg.type != aiohttp.WSMsgType.TEXT:
                         continue
+
                     payload = parse_telemetry_frame(msg.data)
                     if payload is not None:
                         self.data = payload
