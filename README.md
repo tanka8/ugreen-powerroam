@@ -183,7 +183,17 @@ reported in.
   has four spare past the port powers - but every capture so far was taken with
   the outputs off and nothing faulted, so those bytes were all zero and could not
   be told apart from padding. Mapping them needs a capture taken with AC actually
-  running; `scripts/hardware_check.py` prints the raw payloads to do it with.
+  running. Either `scripts/hardware_check.py`, or ask a running integration for
+  them by adding this to `configuration.yaml`:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.ugreen_powerroam.frames: debug
+  ```
+
+  That logs each opcode's payload whenever it changes, so you can switch a load
+  on and watch which bytes move.
 * **Whether the BLE serial matches the cloud serial is unverified.** The migration
   path above assumes it does. If it turns out not to, Bluetooth and cloud entries
   will simply coexist as separate devices rather than merging.
