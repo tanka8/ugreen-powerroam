@@ -378,6 +378,9 @@ def parse_serial(data: bytes) -> tuple[str | None, str | None]:
 
     A 30-byte payload carries both as 15 ASCII characters each; a 15-byte one
     carries only the device serial.
+
+    These are two different strings and they are easy to mix up. Use
+    parse_identity() for anything that has to line up with the cloud.
     """
     text = data.decode("ascii", errors="ignore")
     if len(text) >= 30:
@@ -385,3 +388,21 @@ def parse_serial(data: bytes) -> tuple[str | None, str | None]:
     if len(text) >= 15:
         return None, text[:15]
     return None, None
+
+
+def parse_identity(data: bytes) -> str | None:
+    """Return the serial the cloud transport identifies this device by.
+
+    The 0x05 response carries the IoT serial first and the device serial
+    second, and the cloud API uses the *IoT* serial - it is what comes back as
+    deviceModelName and what the cloud entry's entity unique_ids are built
+    from. Picking the wrong one is not a cosmetic mistake: the two entries then
+    cannot recognise each other, so the duplicate guard never fires and a
+    device set up on both transports gets two of every entity with no shared
+    history. Shipped that way once; hence this function existing at all.
+
+    Returns None for the short 15-byte form, which carries only the device
+    serial. Callers should fall back to the MAC address rather than guess.
+    """
+    iot_serial, _ = parse_serial(data)
+    return iot_serial

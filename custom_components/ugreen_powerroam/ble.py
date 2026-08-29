@@ -262,9 +262,11 @@ class UgreenBleDevice:
             if frame.cmd == protocol.OP_SWITCHES:
                 self._switch_state = protocol.decode_switch_state(frame.data)
             elif frame.cmd == protocol.CMD_GET_SERIAL and self.sn is None:
-                _, device_serial = protocol.parse_serial(frame.data)
-                if device_serial:
-                    self.sn = device_serial
+                # The identity the cloud uses, not the device serial - see
+                # protocol.parse_identity for why the distinction matters.
+                identity = protocol.parse_identity(frame.data)
+                if identity:
+                    self.sn = identity
 
             for key, value in protocol.telemetry_from_frame(frame).items():
                 if self.data.get(key) != value:
@@ -276,12 +278,13 @@ class UgreenBleDevice:
 
 
 async def async_probe_serial(hass: HomeAssistant, address: str):
-    """Connect briefly and ask the unit for its serial number.
+    """Connect briefly and ask the unit for the serial the cloud identifies it by.
 
-    Used by the config flow so a Bluetooth entry can adopt the same identity
-    the cloud entry uses, which is what lets entities keep their history when a
-    device is migrated from one transport to the other. Returns None if the
-    device cannot be reached in time - the flow then falls back to the MAC.
+    Used by the config flow so a Bluetooth entry adopts the same identity the
+    cloud entry uses, which is what lets entities keep their history when a
+    device is migrated from one transport to the other, and what stops the same
+    power station being added twice. Returns None if the device cannot be
+    reached in time - the flow then falls back to the MAC.
     """
     ble_device = bluetooth.async_ble_device_from_address(
         hass, address, connectable=True
@@ -296,9 +299,9 @@ async def async_probe_serial(hass: HomeAssistant, address: str):
         nonlocal serial
         for frame in protocol.decode_frames(bytes(payload)):
             if frame.crc_ok and frame.cmd == protocol.CMD_GET_SERIAL:
-                _, device_serial = protocol.parse_serial(frame.data)
-                if device_serial:
-                    serial = device_serial
+                identity = protocol.parse_identity(frame.data)
+                if identity:
+                    serial = identity
                     hass.loop.call_soon_threadsafe(got_serial.set)
 
     client = await establish_connection(

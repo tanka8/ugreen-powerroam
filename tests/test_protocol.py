@@ -191,6 +191,30 @@ class TestTelemetry:
         assert protocol.telemetry_from_frame(frame)["bat_temp1"] == -3
 
 
+def test_identity_is_the_serial_the_cloud_uses() -> None:
+    """Regression: the 0x05 response carries two serials and they are not
+    interchangeable.
+
+    The cloud identifies this device by the IoT serial (the first one). v1.1.0
+    used the device serial, so a Bluetooth entry could never recognise the
+    cloud entry for the same unit - the duplicate guard never fired and the
+    device came up twice with two of every entity and no shared history.
+    Payload below is a real capture from the device that showed it.
+    """
+    payload = bytes.fromhex(
+        "473132464532333035313130333337473132424330313232313336363636"
+    )
+    assert protocol.parse_identity(payload) == "G12FE2305110337"
+    # Explicitly NOT the device serial.
+    assert protocol.parse_identity(payload) != "G12BC0122136666"
+
+
+def test_identity_is_none_for_the_short_form() -> None:
+    """The 15-byte reply carries only the device serial, which is the wrong
+    string to identify by - callers must fall back to the MAC instead."""
+    assert protocol.parse_identity(b"G12BC0122136666") is None
+
+
 def test_parse_serial_both_forms() -> None:
     long_form = bytes.fromhex(
         "473132464532333035313130333337473132424330313232313336363636"
