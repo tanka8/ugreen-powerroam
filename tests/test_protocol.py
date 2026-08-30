@@ -275,3 +275,157 @@ class TestStreamResync:
             _, consumed = protocol.decode_stream(bytes(buffer))
             del buffer[:consumed]
         assert len(buffer) == 0
+
+
+# ---------------------------------------------------------------------------
+# Structural properties of the codec.
+#
+# Everything above pins the codec against frames a real GS1200 put on the
+# wire. What follows covers the surrounding behaviour those captures did not
+# exercise - buffer handling, bounds, and the opcodes that were not part of
+# that session - using synthetic frames where no real vector exists.
+# ---------------------------------------------------------------------------
+
+
+def telemetry(cmd: int, data: bytes) -> dict:
+    (frame,) = protocol.decode_frames(protocol.encode(cmd, data))
+    return protocol.telemetry_from_frame(frame)
+
+
+def test_crc_is_standard_modbus() -> None:
+    """0x4B37 over b"123456789" is the published CRC-16/MODBUS check value.
+
+    The device vectors prove the codec agrees with the hardware; this proves
+    the algorithm is stock Modbus rather than merely self-consistent.
+    """
+    assert protocol.crc16_modbus(b"123456789") == 0x4B37
+
+
+def test_padding_is_consumed_rather_than_left_in_the_buffer() -> None:
+    """The 40 zero bytes on a real notification must not accumulate forever."""
+    _, consumed = protocol.decode_stream(REAL_NOTIFICATION)
+
+    assert consumed == len(REAL_NOTIFICATION)
+
+
+def test_resynchronises_past_leading_junk() -> None:
+    buf = b"\x11\x22\x33" + protocol.encode(protocol.OP_WORK_MODE, b"\x07")
+
+    frames, consumed = protocol.decode_stream(buf)
+
+    assert len(frames) == 1
+    assert frames[0].data == b"\x07"
+    assert consumed == len(buf)
+
+
+def test_partial_frame_after_a_whole_one_is_left_unconsumed() -> None:
+    whole = protocol.encode(protocol.OP_WORK_MODE, b"\x01")
+    buf = whole + whole[:4]
+
+    frames, consumed = protocol.decode_stream(buf)
+
+    assert len(frames) == 1
+    assert consumed == len(whole)
+    assert buf[consumed:] == whole[:4]
+
+
+def test_lone_trailing_header_byte_is_kept() -> None:
+    """It may be the first half of a 5A A5 header split across two packets."""
+    buf = protocol.encode(protocol.OP_WORK_MODE, b"\x01") + b"\x5a"
+
+    _, consumed = protocol.decode_stream(buf)
+
+    assert buf[consumed:] == b"\x5a"
+
+
+def test_u16_reads_little_endian() -> None:
+    assert protocol.u16(b"\x2c\x01", 0) == 300
+
+
+def test_u16_returns_none_when_the_frame_is_too_short() -> None:
+    assert protocol.u16(b"\x01", 0) is None
+    assert protocol.u16(b"\x01\x02", 1) is None
+
+
+def test_key_voice_is_written_back_inverted() -> None:
+    """The decode side is pinned above; this is the write side of the same rule."""
+    state = dict.fromkeys(protocol.SWITCH_SEND_FIELDS, False)
+    state["key_voice"] = True
+
+    body = protocol.encode_switch_state(state)[7:-2]
+
+    assert body[protocol.SWITCH_SEND_FIELDS.index("key_voice")] == 0x00
+
+
+def test_ac_frequency_is_carried_as_a_raw_value_not_a_flag() -> None:
+    assert protocol.decode_switch_state(REAL_SWITCH_STATE)["ac_frequency_hz"] == 0
+
+    state = dict.fromkeys(protocol.SWITCH_SEND_FIELDS, False)
+    state["ac_frequency_hz"] = 1
+    body = protocol.encode_switch_state(state)[7:-2]
+
+    assert body[protocol.SWITCH_SEND_FIELDS.index("ac_frequency_hz")] == 1
+
+
+def test_truncated_switch_payload_stops_rather_than_raising() -> None:
+    state = protocol.decode_switch_state(b"\x01\x00")
+
+    assert state["low_noise"] is True
+    assert "usb" not in state
+
+
+def test_light_level_is_masked_to_the_low_nibble() -> None:
+    assert protocol.encode_light(0xFF)[7] == 0x0F
+
+
+def test_totals_frame_splits_input_from_output_power() -> None:
+    data = (320).to_bytes(2, "little") + (75).to_bytes(2, "little")
+
+    assert telemetry(protocol.OP_TOTALS, data) == {
+        "charge_power_all": 320,
+        "discharge_pow": 75,
+    }
+
+
+def test_ac_frame_reads_power_from_offset_six() -> None:
+    data = bytes(6) + (17).to_bytes(2, "little")
+
+    assert telemetry(protocol.OP_AC, data) == {"ac_discharge_pow": 17}
+
+
+def test_work_mode_is_passed_through_raw() -> None:
+    assert telemetry(protocol.OP_WORK_MODE, b"\x02") == {"work_mode": 2}
+
+
+def test_ports_frame_too_short_for_every_port_omits_the_usb_total() -> None:
+    assert "usb_discharge_pow" not in telemetry(protocol.OP_PORTS, bytes(4))
+
+
+def test_sub_zero_temperatures_stay_negative() -> None:
+    """Storage below freezing is legitimate and must not be clamped."""
+    data = b"".join(int(v).to_bytes(2, "little") for v in (35, 40, 40, 40))
+
+    assert telemetry(protocol.OP_TEMPS, data)["bat_temp1"] == -5
+
+
+def test_fault_opcode_is_deliberately_unmapped() -> None:
+    """0x01 carries eight fault bytes that stay unmapped - see protocol.py."""
+    assert telemetry(protocol.OP_FAULT, bytes(8)) == {}
+
+
+def test_no_opcode_raises_on_an_empty_payload() -> None:
+    for opcode in (
+        protocol.OP_WORK_MODE,
+        protocol.OP_LIGHT,
+        protocol.OP_SWITCHES,
+        protocol.OP_TEMPS,
+        protocol.OP_TOTALS,
+        protocol.OP_AC,
+        protocol.OP_PORTS,
+        protocol.OP_BATTERY,
+    ):
+        assert telemetry(opcode, b"") == {}
+
+
+def test_parse_serial_gives_up_on_anything_shorter_than_a_serial() -> None:
+    assert protocol.parse_serial(b"NOPE") == (None, None)
