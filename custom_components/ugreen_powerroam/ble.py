@@ -307,6 +307,10 @@ class UgreenBleDevice:
         try:
             await client.start_notify(BLE_NOTIFY_UUID, self._on_notify)
             self.connect_count += 1
+            # The other half of the same problem: entities written while the
+            # link was down are unavailable, and if the unit then reports
+            # exactly what it did before nothing else would wake them.
+            self._schedule_notify(immediate=True)
             # Ask for the serial once so the device identity is known even if
             # the config entry was set up from an advertisement alone.
             if self.sn is None:
@@ -323,6 +327,10 @@ class UgreenBleDevice:
         client, self._client = self._client, None
         if client is None:
             return
+        # Entities read .available at the moment they write their state, and
+        # nothing else would make them write once the frames stop. Without
+        # this they carried on showing the last reading as live.
+        self._schedule_notify(immediate=True)
         with contextlib.suppress(BleakError, asyncio.CancelledError, OSError):
             await client.disconnect()
 

@@ -12,12 +12,13 @@ The wire format itself is covered without any of this in tests/test_protocol.py.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from bleak.exc import BleakError
 
-from custom_components.ugreen_powerroam import protocol
+from custom_components.ugreen_powerroam import ble, protocol
 from custom_components.ugreen_powerroam.ble import (
     MAX_BUFFER,
     UgreenBleDevice,
@@ -51,6 +52,12 @@ class FakeClient:
         if self.fail_with is not None:
             raise self.fail_with
         self.writes.append(bytes(data))
+
+    async def start_notify(self, uuid, callback) -> None:
+        self.notify_callback = callback
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
 
 
 class FakeHandle:
@@ -449,6 +456,45 @@ async def test_a_control_write_notifies_immediately(device) -> None:
 
 
 # -- lifecycle --------------------------------------------------------------
+
+
+async def test_listeners_are_told_when_the_link_drops(device) -> None:
+    """Regression: entities never went unavailable, because nothing woke them.
+
+    They read .available only when they write their state, and with the link
+    down no frames arrive to make them.
+    """
+    states: list[bool] = []
+    device.add_listener(lambda: states.append(device.available))
+    device._client = FakeClient()
+
+    await device._disconnect()
+
+    assert states == [False]
+
+
+async def test_listeners_are_told_when_the_link_comes_up(device, monkeypatch) -> None:
+    client = FakeClient()
+    states: list[bool] = []
+    device.add_listener(lambda: states.append(device.available))
+
+    async def establish(*args, **kwargs):
+        return client
+
+    monkeypatch.setattr(ble, "establish_connection", establish)
+    monkeypatch.setattr(
+        ble.bluetooth, "async_ble_device_from_address", lambda *a, **k: object()
+    )
+
+    task = asyncio.create_task(device._connect_once())
+    await asyncio.sleep(0)
+    assert states == [True]
+    assert device.connect_count == 1
+
+    device._disconnected.set()
+    await task
+
+    assert states == [True, False]
 
 
 async def test_stop_cancels_a_pending_debounce(device) -> None:
