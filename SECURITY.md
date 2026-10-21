@@ -47,3 +47,9 @@ no security support beyond a best effort.
 Log lines are not filtered by anyone - the `token` header and your email/password are
 never logged by this integration, but check Home Assistant's own debug output for
 anything unexpected before posting it publicly.
+
+The integration's own diagnostics download (Settings, Devices & services, UGREEN
+PowerRoam, the three dots menu, Download diagnostics) redacts your email, password,
+token, user id, serial number and MAC address, including in the entry title and in raw
+Bluetooth payloads. It is the safer thing to attach to an issue than raw logs, but read
+it before you post it all the same.

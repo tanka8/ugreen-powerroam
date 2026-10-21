@@ -66,6 +66,7 @@ debug key.
 | Charge Time Remaining | `sensor` | hours |
 | Total / AC / DC / USB Output Power | `sensor` | W |
 | Input Power | `sensor` | W |
+| Input Energy, Total Output Energy | `sensor` | kWh, for the Energy dashboard - see [Energy dashboard](#energy-dashboard) |
 | AC Input / Output Voltage, DC Voltage | `sensor` | V |
 | Battery Temperature ×2, Inverter Temperature ×2 | `sensor` | °C |
 | Fault Code | `sensor` | raw code, empty when healthy |
@@ -84,15 +85,84 @@ protocol either does not carry or does not carry in a confirmed form.
 | All four switches | yes | yes |
 | Battery %, charge/discharge time remaining | yes | yes |
 | Total / AC / DC / USB power, input power | yes | yes |
+| Input and total output energy (kWh) | yes | yes |
 | Work mode | yes | yes |
 | Battery and inverter temperatures | yes | yes |
 | Battery health, cycle count, capacity remaining | yes | yes |
 | Cell 1-7 voltage | **yes** | no |
 | AC/DC voltages, fault code | no | reports nothing - see below |
+| Bluetooth signal strength, last frame age (disabled by default) | yes | no |
+| Raw-value sensors (disabled by default) | the frames it does not decode | the settings it does not expose |
 
 State is **pushed** on both transports - about every 0.6 seconds over Bluetooth (then
 coalesced, so Home Assistant is not woken 1.6 times a second), and roughly every 15
-seconds over the cloud WebSocket. Nothing polls.
+seconds over the cloud WebSocket. Nothing polls the unit or the network. The only
+timer is a 30 second tick that keeps the energy totals and the two Bluetooth link
+sensors current, and it reads state Home Assistant already holds.
+
+### Energy dashboard
+
+Neither transport reports an energy counter, only power, so **Input Energy** and
+**Total Output Energy** are summed up in Home Assistant from Input Power and Total
+Output Power. They are `total_increasing` kWh sensors, so they can be added under
+**Settings, Dashboards, Energy** like any other.
+
+* They count only while the reading is live. If the link is down, the cloud socket is
+  down, or a Bluetooth connection is open but no frame has arrived for 20 seconds,
+  nothing is added - energy used while Home Assistant cannot see the unit is not
+  counted, and is not guessed at.
+* Each reading is held until the next one arrives. That is exact for a load that
+  switches on and off, and it is how the Bluetooth transport reports (only changes).
+  Over the cloud, which reports every ~15 seconds, a load that cycles faster than that
+  is averaged out rather than captured.
+* The totals start at zero when the entity is first created and survive restarts. They
+  are rounded to a watt-hour.
+* **Input Energy is everything the unit takes in** - mains, solar or car - including
+  what passes straight through to loads while it charges. It is not the energy that
+  ends up in the battery, so do not add it as a battery's "energy going in". Adding it
+  as an individual device, or as the source it comes from, is closer to the truth.
+
+### Diagnostics
+
+**Settings, Devices & services, UGREEN PowerRoam, the three dots menu, Download
+diagnostics** produces a file to attach to an issue. It holds the last telemetry the
+integration decoded, the names of every field the cloud sent (and which of them have
+no entity), and, over Bluetooth, the decoder's own counters: frames received, CRC
+failures, connects, a count per opcode, and the opcodes it does not recognise with their
+latest payload. That last part is how a model with different frames can be mapped.
+
+Your email, password, token, user id, serial number and MAC address are redacted,
+including from the config entry's title, and so are any telemetry fields on an
+unfamiliar model that are named like one of those. Payloads of unrecognised opcodes are
+scrubbed of your serial and MAC too. It is still worth reading the file before posting
+it publicly.
+
+### Troubleshooting sensors (disabled by default)
+
+These exist to find out what a unit is doing, not to automate on. They are registered
+disabled; turn one on from its entity settings.
+
+* **Bluetooth Signal Strength** (dBm) and **Bluetooth Last Frame Age** (s), Bluetooth
+  only, to help decide where an adapter or ESPHome Bluetooth proxy should go. The
+  signal strength is that of the last advertisement any adapter or proxy heard, with
+  the adapter (`source`) and the advertisement's age as attributes - a connected unit
+  usually stops advertising, so the value can be from just before the connection was
+  made. The frame age is near zero on a healthy link and keeps growing while the link
+  is down.
+* **Raw ... Frame (0x..)**, Bluetooth only: the payload, in hex, of each frame the
+  integration cannot (fully) decode - the fault flags, screen brightness and timeout,
+  DC charge current, low-battery alarm and timer blocks, and the AC and port frames
+  whose voltage bytes read zero on the 1200W. Plug a load in or change a setting in the
+  app and watch which bytes move. A sensor stays unavailable until the unit sends that
+  frame, which not every model does.
+* **... (raw)**, cloud only: the value of each setting the README lists under
+  [Known gaps](#known-gaps) as reported but not exposed (battery preservation, quiet
+  mode, the two tones, display brightness, the low-battery alarm, the shutdown timers,
+  and `switch_conpower`, the possible U-Turbo).
+
+If you have a different model, enabling the ones that apply and attaching the
+diagnostics download to an issue is the most useful thing you can do - see
+[Confirming another model](#confirming-another-model).
 
 ## Install
 
@@ -192,6 +262,10 @@ back carries it byte-swapped as `C0 A1`. GATT service `ABF0` exposes `ABF1` to w
 to and `ABF2` to subscribe to - and note the service is **not advertised**, so
 discovery matches on the local name (`ugreen gs1200`) instead.
 
+A frame is only trusted to say how long it is once its CRC has passed. If the CRC
+fails the frame is dropped and decoding carries on one byte after its header, so a
+damaged length field cannot swallow the good frames behind it.
+
 **The one trap worth knowing about**, because it bites hard: the app uses **two
 different field layouts for the same `0x16` switch opcode**. What the device reports
 has 12 fields; what you write has 11, with no slot for `lowBatteryWarning`. Echo a
@@ -226,7 +300,9 @@ reported in.
 * **U-Turbo is not implemented.** It showed up in the app but never got exercised
   during capture, so which `map` key it sets is unconfirmed - guessing wrong here
   risks writing to the wrong field. If you can capture it (see
-  [Contributing](#contributing)), it's a small addition.
+  [Contributing](#contributing)), it's a small addition. The cloud key it probably
+  uses, `switch_conpower`, is available as a disabled raw sensor - toggle U-Turbo in
+  the app while watching it and report what you see.
 * **The set-and-forget settings aren't exposed**: battery preservation
   (`bat_health_set`), quiet mode / tones (`low_sound_set`, `bee_sound_set_key`,
   `bee_sound_set_warning`), display brightness (`display_bright_set`), low-battery
@@ -234,6 +310,8 @@ reported in.
   `time_dis_shutdown`, `timeoff_set`, `timeoff_cap`, `timeoff_zoom`) are all visible
   in the telemetry but not wired up as controllable entities - each would need its
   own capture to confirm the write semantics for something most people set once.
+  Their current values can be watched read-only through the disabled raw sensors on
+  the cloud transport, see [Troubleshooting sensors](#troubleshooting-sensors-disabled-by-default).
 * **`bat_cap_remain` and `work_mode` are raw, uncalibrated numbers.** Both are
   exposed for graphing/automations, but their scale and the meaning of each
   `work_mode` value weren't confirmed against a known reference during capture.
@@ -278,6 +356,12 @@ The useful part of that report is the **UNKNOWN opcodes** list - things your mod
 sends that this integration does not recognise - and whether the switch block is
 the same length. Paste the whole thing into an issue.
 
+If you would rather not run a script, the integration can show you the same thing from
+inside Home Assistant: enable the [raw-value sensors](#troubleshooting-sensors-disabled-by-default)
+that apply, and attach the [diagnostics download](#diagnostics) to an issue. It lists
+every opcode (or cloud field) your unit sends that nothing here recognises, with the
+latest payload of each, and your account and serial are redacted.
+
 > If your unit reports a **different length switch block**, do not write switches
 > on it until the layout is understood. The 1200W already uses two different field
 > layouts for that one opcode and getting it wrong silently changes settings you
@@ -297,8 +381,8 @@ pip install pytest aiohttp cryptography
 python -m pytest -v
 ```
 
-`tests/` runs the pure-Python parts - the BLE codec, the telemetry frame parser and
-the RSA encryption used at login - with no network, no hardware and no Home
+`tests/` runs the pure-Python parts - the BLE codec, the telemetry frame parser, the
+power-to-energy integrator and the RSA encryption used at login - with no network, no hardware and no Home
 Assistant. The BLE tests run against byte strings captured from a real PowerRoam, so
 they are regression tests against the device rather than against the reverse
 engineered app bundle alone. The cloud parser is tested against a synthetic sample
@@ -306,7 +390,8 @@ frame
 (`docs/sample_telemetry_frame.json`, shaped like a real capture but with fictional
 device identifiers), with no network, no Home Assistant, and no credentials.
 
-`tests_ha/` runs the config flow through Home Assistant itself using
+`tests_ha/` runs the config flow, the entities each transport creates, the diagnostics
+download and the Bluetooth transport's own logic through Home Assistant itself using
 `pytest-homeassistant-custom-component`. **That harness does not work on Windows** -
 its autouse fixtures need a socketpair that `pytest-socket` blocks - so those run on
 Linux in CI. See `tests_ha/README.md`.
