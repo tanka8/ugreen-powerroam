@@ -241,6 +241,46 @@ def test_a_damaged_length_does_not_cost_the_frames_behind_it(device) -> None:
     assert "work_mode" not in device.data
 
 
+def test_counters_separate_good_bad_and_unknown_frames(device) -> None:
+    bad = bytearray(totals_frame(1, 2))
+    bad[7] ^= 0xFF
+    payload = totals_frame(320, 75) + bytes(bad) + device_frame(0x7E, b"\x01\x02")
+
+    device._on_notify(None, bytearray(payload))
+
+    assert device.frames_received == 3
+    assert device.crc_failures == 1
+    # Only frames that passed the CRC are attributed to an opcode.
+    assert device.opcode_counts == {protocol.OP_TOTALS: 1, 0x7E: 1}
+    report = device.diagnostics()
+    assert report["unknown_opcodes"] == {"0x7e": {"count": 1, "last_payload": "0102"}}
+
+
+def test_known_but_unmapped_opcodes_are_not_reported_as_unknown(device) -> None:
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+
+    assert device.opcode_counts == {protocol.OP_TIMERS: 1}
+    assert device.diagnostics()["unknown_opcodes"] == {}
+
+
+def test_last_frame_age_counts_from_the_last_good_frame(device) -> None:
+    assert device.last_frame_age is None
+
+    device._on_notify(None, bytearray(totals_frame(1, 2)))
+    device._last_frame_at -= 7.5  # as if it arrived 7.5 seconds ago
+
+    assert 7.5 <= device.last_frame_age < 8.5
+
+
+def test_a_bad_frame_does_not_refresh_the_last_frame_age(device) -> None:
+    bad = bytearray(totals_frame(1, 2))
+    bad[7] ^= 0xFF
+
+    device._on_notify(None, bad)
+
+    assert device.last_frame_age is None
+
+
 def test_a_desynchronised_buffer_is_discarded(device) -> None:
     """Junk that never resynchronises must not grow without bound."""
     device._on_notify(None, bytearray(b"\x5a" * (MAX_BUFFER + 64)))

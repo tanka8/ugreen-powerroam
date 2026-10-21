@@ -20,7 +20,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Callable
+from typing import Any
 
 from bleak.exc import BleakError
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
@@ -106,6 +108,21 @@ class UgreenBleDevice:
         self._notify_handle: asyncio.TimerHandle | None = None
         self._last_payloads: dict[int, str] = {}
 
+        # Link and decoder counters for the diagnostics download. They run for
+        # the life of the config entry and are not reset on reconnect, so a
+        # flaky link shows up as a climbing connect_count instead of vanishing.
+        self.connect_count = 0
+        # Every frame the decoder returned, good or bad; crc_failures is the
+        # subset whose CRC did not check out.
+        self.frames_received = 0
+        self.crc_failures = 0
+        # CRC-valid frames only, by opcode.
+        self.opcode_counts: dict[int, int] = {}
+        # The latest payload, hex, for each opcode protocol.KNOWN_OPCODES lacks.
+        self._unknown_payloads: dict[int, str] = {}
+        # time.monotonic() when the last CRC-valid frame arrived.
+        self._last_frame_at: float | None = None
+
     @property
     def available(self) -> bool:
         """Whether the data in .data is live rather than left over.
@@ -120,6 +137,47 @@ class UgreenBleDevice:
     def unique_id_base(self) -> str:
         """Stable prefix for entity unique_ids, shared with the cloud client."""
         return self._unique_id_base
+
+    @property
+    def last_frame_age(self) -> float | None:
+        """Seconds since the last CRC-valid frame, or None if there has not been one."""
+        if self._last_frame_at is None:
+            return None
+        return time.monotonic() - self._last_frame_at
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Link and decoder state for the diagnostics download.
+
+        Nothing here identifies the unit: no address, no serial. The payloads of
+        unknown opcodes might, on a model nobody has looked at yet, so the
+        diagnostics module scrubs those before they leave Home Assistant.
+        """
+        unknown = {
+            cmd: count
+            for cmd, count in self.opcode_counts.items()
+            if cmd not in protocol.KNOWN_OPCODES
+        }
+        age = self.last_frame_age
+        return {
+            "connected": self.available,
+            "connect_count": self.connect_count,
+            "frames_received": self.frames_received,
+            "crc_failures": self.crc_failures,
+            "last_frame_age_s": None if age is None else round(age, 1),
+            "frames_by_opcode": {
+                f"0x{cmd:02x}": count
+                for cmd, count in sorted(self.opcode_counts.items())
+            },
+            "unknown_opcodes": {
+                f"0x{cmd:02x}": {
+                    "count": count,
+                    "last_payload": self._unknown_payloads.get(cmd),
+                }
+                for cmd, count in sorted(unknown.items())
+            },
+            "switch_state": self._switch_state,
+            "buffer_bytes": len(self._buffer),
+        }
 
     # -- hub-shaped surface -------------------------------------------------
 
@@ -248,6 +306,7 @@ class UgreenBleDevice:
 
         try:
             await client.start_notify(BLE_NOTIFY_UUID, self._on_notify)
+            self.connect_count += 1
             # Ask for the serial once so the device identity is known even if
             # the config entry was set up from an advertisement alone.
             if self.sn is None:
@@ -279,12 +338,20 @@ class UgreenBleDevice:
 
         changed = False
         for frame in frames:
+            self.frames_received += 1
             if not frame.crc_ok:
+                self.crc_failures += 1
                 # Nothing in a failed frame is trusted, its length included, so
                 # decode_stream has already resumed one byte after its header:
                 # the good frames behind it are further down this same list.
                 _LOGGER.debug("dropping BLE frame with bad CRC: %s", frame.raw.hex())
                 continue
+
+            self._last_frame_at = time.monotonic()
+            self.opcode_counts[frame.cmd] = self.opcode_counts.get(frame.cmd, 0) + 1
+            if frame.cmd not in protocol.KNOWN_OPCODES:
+                self._unknown_payloads[frame.cmd] = frame.data.hex()
+
             if _FRAME_LOGGER.isEnabledFor(logging.DEBUG):
                 payload = frame.data.hex()
                 if self._last_payloads.get(frame.cmd) != payload:

@@ -52,6 +52,40 @@ OP_WORK_MODE = 0x12
 OP_LIGHT = 0x13
 OP_SWITCHES = 0x16
 
+# Opcodes the app bundle names but this integration decodes nothing from - see
+# "Not mapped, on purpose" further down. They are known, so seeing one is not news.
+OP_BRIGHTNESS = 0x10
+OP_SCREEN_TIMEOUT = 0x11
+OP_DC_CHARGE_CURRENT = 0x14
+OP_LOW_BATTERY_ALARM = 0x15
+OP_TIMERS = 0x17
+
+# Everything named above, for telling "the app knows this opcode" from "no one
+# has seen this before". A frame outside this set is what a different model, or
+# a newer firmware, is most likely to put on the wire, and is what the
+# diagnostics download counts and keeps a sample of.
+KNOWN_OPCODES = frozenset(
+    {
+        CMD_GET_SERIAL,
+        CMD_GET_VERSION,
+        CMD_GET_MAC,
+        OP_FAULT,
+        OP_TEMPS,
+        OP_BATTERY,
+        OP_AC,
+        OP_PORTS,
+        OP_TOTALS,
+        OP_BRIGHTNESS,
+        OP_SCREEN_TIMEOUT,
+        OP_WORK_MODE,
+        OP_LIGHT,
+        OP_DC_CHARGE_CURRENT,
+        OP_LOW_BATTERY_ALARM,
+        OP_SWITCHES,
+        OP_TIMERS,
+    }
+)
+
 
 # The most payload bytes a frame may claim before it is treated as junk. The
 # length field is a uint16, but nothing real comes close: the largest payload
