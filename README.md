@@ -18,6 +18,10 @@ Two transports, your choice at setup:
 > and field names, but that is an assumption, not a confirmation - see
 > [Known gaps](#known-gaps).
 
+> **The unit's Bluetooth control has no authentication.** Anyone within Bluetooth
+> range can switch its outputs. That is how the device is built, not something this
+> integration adds - see [Security](#security).
+
 ## Why Bluetooth, and why the cloud came first
 
 Over **IP** the device has no local control path at all. A full TCP port scan of all
@@ -125,6 +129,33 @@ would give you two of every entity.
 > entry for the same power station - you would get both, with two of every shared
 > entity. Remove the Bluetooth entry and add it again on v1.1.1 or later. Nothing
 > else is affected, and cloud-only setups were never involved.
+
+## Security
+
+**The PowerRoam's Bluetooth control has no authentication.** Its GATT server has no
+pairing, no bonding and no encryption, so anything that can connect to the unit can
+read its state and send it commands. That includes switching the **AC, DC and USB
+outputs** on and off. In practice that means anyone within Bluetooth range, using this
+integration, the UGREEN app or any generic Bluetooth tool.
+
+* **This is a property of the device, not a bug in this integration.** The integration
+  talks the same open protocol the app does; it cannot add authentication the unit does
+  not have, and it does not make the exposure any larger or smaller. Using the cloud
+  transport does not turn the unit's Bluetooth server off either; the integration has
+  no way to do that.
+* The unit accepts one Bluetooth connection at a time, so while Home Assistant (or the
+  phone app) is connected nobody else can open a second one. Whenever nothing is
+  connected - Home Assistant restarting, out of range, or the integration disabled - the
+  unit is open to whoever connects first.
+* Range is the only access control. If something plugged into an output must not lose
+  power unexpectedly - a freezer, medical equipment, a router you need to stay online -
+  keep that in mind when deciding where the unit sits, and do not assume the switches
+  can only be reached through Home Assistant.
+
+Controlling the unit through Home Assistant is protected by Home Assistant's own login,
+as any entity is, and the cloud transport is protected by your UGREEN account. Neither
+changes what the unit's own Bluetooth server accepts. See [SECURITY.md](SECURITY.md)
+for what this integration stores and sends.
 
 ## How it works
 
