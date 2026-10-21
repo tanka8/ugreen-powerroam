@@ -6,7 +6,7 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import RestoreSensor, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import MAX_LENGTH_STATE_STATE, EntityCategory
 from homeassistant.core import HomeAssistant
@@ -14,15 +14,18 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
+    BLE_FRAME_STALE_AFTER,
     BLE_LINK_SENSORS,
     BLE_SENSORS,
     CLOUD_SENSORS,
     DISABLED_BY_DEFAULT_SENSORS,
     DOMAIN,
+    ENERGY_SENSORS,
     SENSORS,
     SUGGESTED_HOURS,
     TRANSPORT_BLE,
 )
+from .energy import PowerIntegrator
 
 # How often the sensors that are not pushed to are asked for a fresh value.
 SCAN_INTERVAL = timedelta(seconds=30)
@@ -45,6 +48,8 @@ async def async_setup_entry(
 def _entity_class(key: str) -> type[UgreenSensor]:
     if key in BLE_LINK_SENSORS:
         return UgreenBleLinkSensor
+    if key in ENERGY_SENSORS:
+        return UgreenEnergySensor
     return UgreenSensor
 
 
@@ -140,3 +145,73 @@ class UgreenBleLinkSensor(UgreenSensor):
             "source": info.source,
             "advertisement_age": round(time.monotonic() - info.time),
         }
+
+
+class UgreenEnergySensor(RestoreSensor, UgreenSensor):
+    """Cumulative energy for the Energy dashboard, summed up from a power reading.
+
+    The unit reports watts and no energy counter, so the total is integrated
+    here (see energy.py for how) and restored across restarts. Two things keep
+    that honest:
+
+    * It only counts time the reading is live. A dropped link, a cloud socket
+      that is down, or a Bluetooth connection that is open but has stopped
+      delivering frames all stop the clock rather than holding the last value.
+    * It is advanced both when the hub reports and on a timer. The Bluetooth hub
+      only reports a change, so a steady load would otherwise leave the total
+      frozen for hours and then jump, smearing the energy across the wrong hours
+      of the dashboard.
+
+    The total is available even while the link is down. It is a running count,
+    not a live reading, and what it holds is still true.
+    """
+
+    _attr_should_poll = True
+
+    def __init__(self, api, hub, key: str) -> None:
+        super().__init__(api, hub, key)
+        self._power_key = ENERGY_SENSORS[key]
+        self._integrator = PowerIntegrator()
+
+    @property
+    def native_value(self) -> float:
+        # Whole watt-hours: fine enough for a dashboard, and it keeps the
+        # recorder from storing a new state on every tiny increment.
+        return round(self._integrator.total_kwh, 3)
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    def _live_power(self) -> float | None:
+        """The power reading to integrate, or None if it cannot be trusted."""
+        hub = self._hub
+        if not hub.available:
+            return None
+        # Only the Bluetooth hub can tell a stalled link from a quiet one.
+        if hasattr(hub, "last_frame_age"):
+            age = hub.last_frame_age
+            if age is None or age > BLE_FRAME_STALE_AFTER:
+                return None
+        value = hub.data.get(self._power_key)
+        return value if isinstance(value, int | float) else None
+
+    def _advance(self) -> None:
+        self._integrator.update(time.monotonic(), self._live_power())
+
+    def _on_hub_update(self) -> None:
+        self._advance()
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        if (last := await self.async_get_last_sensor_data()) is not None:
+            try:
+                restored = float(last.native_value)
+            except (TypeError, ValueError):
+                restored = 0.0
+            self._integrator = PowerIntegrator(restored)
+        self._advance()
+        self._remove_listener = self._hub.add_listener(self._on_hub_update)
+
+    async def async_update(self) -> None:
+        self._advance()

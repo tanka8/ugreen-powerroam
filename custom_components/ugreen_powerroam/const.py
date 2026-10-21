@@ -245,6 +245,22 @@ SENSORS = {
         "diagnostic",
         "mdi:timer-outline",
     ),
+    "energy_input": (
+        "Input Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        None,
+        None,
+    ),
+    "energy_output": (
+        "Total Output Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        None,
+        None,
+    ),
     **{
         BLE_RAW_KEYS[opcode]: (
             f"Raw {label} Frame (0x{opcode:02X})",
@@ -269,6 +285,20 @@ BLE_LINK_SENSORS = {
     "ble_rssi": "rssi",
     "ble_last_frame_age": "last_frame_age",
 }
+
+# Cumulative energy, for the Energy dashboard: key -> the power reading it is
+# integrated from. Neither transport reports an energy counter, so these are
+# summed up in Home Assistant (see energy.py) and restored across restarts.
+ENERGY_SENSORS = {
+    "energy_input": "charge_power_all",
+    "energy_output": "discharge_pow",
+}
+
+# The unit pushes a frame about every 0.6 seconds. If none has arrived for this
+# long the link is treated as stalled even though the connection still looks
+# open, and power is no longer integrated - a half-open connection would
+# otherwise be counted as the last reading, held, for as long as it lasted.
+BLE_FRAME_STALE_AFTER = 20
 
 # Entities that exist to troubleshoot rather than to use. They are registered
 # disabled, so nobody gets extra entities (and their history) they did not ask
@@ -303,6 +333,7 @@ BLE_SENSORS = {
     *(f"cell_voltage_{n}" for n in range(1, 8)),
     *BLE_LINK_SENSORS,
     *BLE_RAW_KEYS.values(),
+    *ENERGY_SENSORS,
 }
 
 # Per-cell voltages have no cloud equivalent - the WebSocket never reports them.
