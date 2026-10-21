@@ -9,7 +9,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import BLE_SENSORS, DOMAIN, SENSORS, SUGGESTED_HOURS, TRANSPORT_BLE
+from .const import (
+    BLE_SENSORS,
+    CLOUD_SENSORS,
+    DOMAIN,
+    SENSORS,
+    SUGGESTED_HOURS,
+    TRANSPORT_BLE,
+)
 
 
 async def async_setup_entry(
@@ -20,7 +27,7 @@ async def async_setup_entry(
 
     # Only offer sensors this transport can actually populate, so neither setup
     # is left with permanently unavailable entities.
-    keys = SENSORS if data["transport"] != TRANSPORT_BLE else BLE_SENSORS
+    keys = BLE_SENSORS if data["transport"] == TRANSPORT_BLE else CLOUD_SENSORS
     async_add_entities(UgreenSensor(api, hub, key) for key in SENSORS if key in keys)
 
 

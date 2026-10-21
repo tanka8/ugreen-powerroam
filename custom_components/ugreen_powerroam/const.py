@@ -219,6 +219,11 @@ BLE_SENSORS = {
 # They are one of the things local Bluetooth buys you.
 BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)}
 
+# The cloud transport is offered everything except what only Bluetooth can fill.
+# BLE_ONLY_SENSORS used to be defined and never applied, so a cloud setup got
+# seven cell-voltage sensors that could never have a value.
+CLOUD_SENSORS = set(SENSORS) - BLE_ONLY_SENSORS
+
 # Raw values for these keys come from the API in seconds. native stays in
 # seconds (so history/statistics don't break); suggested_unit_of_measurement
 # tells HA's frontend to display and store new stats in hours instead.
