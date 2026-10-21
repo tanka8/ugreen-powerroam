@@ -8,13 +8,17 @@ start disabled, which never get a state at all.
 
 from __future__ import annotations
 
+import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.const import EntityCategory
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ugreen_powerroam.const import BLE_SENSORS, DOMAIN
+from custom_components.ugreen_powerroam.sensor import UgreenBleLinkSensor
 
 SERIAL = "G12FE2305110337"
 ADDRESS = "AA:BB:CC:DD:EE:FF"
@@ -89,6 +93,7 @@ async def test_cloud_is_not_offered_sensors_only_bluetooth_can_fill(hass) -> Non
     keys = set(sensor_entries(hass, entry))
 
     assert not {key for key in keys if key.startswith("cell_voltage_")}
+    assert not {"ble_rssi", "ble_last_frame_age"} & keys
     # What the cloud does fill is untouched.
     assert {"battery_percentage", "ac_vol", "dc_vol", "device_fault2"} <= keys
 
@@ -104,3 +109,70 @@ async def test_bluetooth_is_offered_exactly_what_it_can_fill(hass) -> None:
     assert "ac_in_vol" not in keys
 
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+# -- connection-quality sensors ----------------------------------------------
+
+
+async def test_link_sensors_are_diagnostic_and_start_disabled(hass) -> None:
+    entry = await setup_ble(hass)
+
+    entries = sensor_entries(hass, entry)
+
+    for key in ("ble_rssi", "ble_last_frame_age"):
+        assert entries[key].disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        assert entries[key].entity_category is EntityCategory.DIAGNOSTIC
+    # Only the troubleshooting entities start disabled.
+    assert entries["battery_percentage"].disabled_by is None
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+def link_sensor(key: str, **hub_attributes) -> UgreenBleLinkSensor:
+    """A link sensor over a stand-in for the Bluetooth device."""
+    hub = SimpleNamespace(
+        unique_id_base=SERIAL,
+        device_name="ugreen gs1200",
+        sn=SERIAL,
+        available=False,
+        data={},
+        rssi=None,
+        last_frame_age=None,
+        last_advertisement=lambda: None,
+    )
+    for name, value in hub_attributes.items():
+        setattr(hub, name, value)
+    return UgreenBleLinkSensor(hub, hub, key)
+
+
+def test_rssi_comes_from_the_last_advertisement() -> None:
+    heard = SimpleNamespace(
+        rssi=-67, source="11:22:33:44:55:66", time=time.monotonic() - 12
+    )
+    sensor = link_sensor("ble_rssi", rssi=-67, last_advertisement=lambda: heard)
+
+    assert sensor.native_value == -67
+    assert sensor.available is True
+    attributes = sensor.extra_state_attributes
+    assert attributes["source"] == "11:22:33:44:55:66"
+    assert 12 <= attributes["advertisement_age"] <= 14
+
+
+def test_rssi_is_unavailable_until_an_adapter_has_heard_the_unit() -> None:
+    sensor = link_sensor("ble_rssi")
+
+    assert sensor.native_value is None
+    assert sensor.available is False
+    assert sensor.extra_state_attributes is None
+
+
+def test_last_frame_age_stays_available_while_the_link_is_down() -> None:
+    sensor = link_sensor("ble_last_frame_age", available=False, last_frame_age=41.6)
+
+    assert sensor.native_value == 42
+    assert sensor.available is True
+    assert sensor.extra_state_attributes is None
+
+
+def test_last_frame_age_is_unavailable_before_the_first_frame() -> None:
+    assert link_sensor("ble_last_frame_age").available is False

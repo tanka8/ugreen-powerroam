@@ -288,6 +288,19 @@ def test_a_bad_frame_does_not_refresh_the_last_frame_age(device) -> None:
     assert device.last_frame_age is None
 
 
+def test_rssi_is_the_signal_of_the_last_advertisement(device, monkeypatch) -> None:
+    heard = SimpleNamespace(rssi=-71)
+    monkeypatch.setattr(ble.bluetooth, "async_last_service_info", lambda *a, **k: heard)
+
+    assert device.rssi == -71
+
+
+def test_rssi_is_none_when_nothing_has_been_heard(device, monkeypatch) -> None:
+    monkeypatch.setattr(ble.bluetooth, "async_last_service_info", lambda *a, **k: None)
+
+    assert device.rssi is None
+
+
 def test_a_desynchronised_buffer_is_discarded(device) -> None:
     """Junk that never resynchronises must not grow without bound."""
     device._on_notify(None, bytearray(b"\x5a" * (MAX_BUFFER + 64)))

@@ -145,6 +145,23 @@ class UgreenBleDevice:
             return None
         return time.monotonic() - self._last_frame_at
 
+    def last_advertisement(self) -> bluetooth.BluetoothServiceInfoBleak | None:
+        """The newest advertisement any adapter or proxy has heard from the unit.
+
+        A connected peripheral usually stops advertising, so while Home
+        Assistant holds the connection this may be the last one heard before it
+        connected, not a live reading.
+        """
+        return bluetooth.async_last_service_info(
+            self._hass, self.address, connectable=True
+        )
+
+    @property
+    def rssi(self) -> int | None:
+        """Signal strength, in dBm, of the last advertisement - see above."""
+        info = self.last_advertisement()
+        return None if info is None else info.rssi
+
     def diagnostics(self) -> dict[str, Any]:
         """Link and decoder state for the diagnostics download.
 

@@ -189,7 +189,36 @@ SENSORS = {
         )
         for n in range(1, 8)
     },
+    "ble_rssi": (
+        "Bluetooth Signal Strength",
+        "dBm",
+        "signal_strength",
+        "measurement",
+        "diagnostic",
+        None,
+    ),
+    "ble_last_frame_age": (
+        "Bluetooth Last Frame Age",
+        "s",
+        "duration",
+        "measurement",
+        "diagnostic",
+        "mdi:timer-outline",
+    ),
 }
+
+# Readings about the Bluetooth link rather than the power station. They come
+# from the Bluetooth stack, not from a frame: key -> the UgreenBleDevice
+# attribute that holds the value.
+BLE_LINK_SENSORS = {
+    "ble_rssi": "rssi",
+    "ble_last_frame_age": "last_frame_age",
+}
+
+# Entities that exist to troubleshoot rather than to use. They are registered
+# disabled, so nobody gets a pair of extra entities (and their history) they did
+# not ask for; turn them on from the entity's settings.
+DISABLED_BY_DEFAULT_SENSORS = {*BLE_LINK_SENSORS}
 
 # Which sensors each transport can actually populate. Entities are only created
 # for keys their transport can fill, so neither setup carries a permanently
@@ -213,11 +242,13 @@ BLE_SENSORS = {
     "bat_cycle_num",
     "bat_cap_remain",
     *(f"cell_voltage_{n}" for n in range(1, 8)),
+    *BLE_LINK_SENSORS,
 }
 
 # Per-cell voltages have no cloud equivalent - the WebSocket never reports them.
-# They are one of the things local Bluetooth buys you.
-BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)}
+# They are one of the things local Bluetooth buys you. The link readings are
+# about a Bluetooth connection, so the cloud has nothing to say about them.
+BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)} | set(BLE_LINK_SENSORS)
 
 # The cloud transport is offered everything except what only Bluetooth can fill.
 # BLE_ONLY_SENSORS used to be defined and never applied, so a cloud setup got
