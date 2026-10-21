@@ -8,7 +8,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import MAX_LENGTH_STATE_STATE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -85,7 +85,12 @@ class UgreenSensor(SensorEntity):
 
     @property
     def native_value(self):
-        return self._hub.data.get(self._key)
+        value = self._hub.data.get(self._key)
+        # A raw frame in hex can run past the longest state Home Assistant will
+        # store, and a state that is too long is dropped altogether.
+        if isinstance(value, str) and len(value) > MAX_LENGTH_STATE_STATE:
+            return value[:MAX_LENGTH_STATE_STATE]
+        return value
 
     @property
     def available(self) -> bool:

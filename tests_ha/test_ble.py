@@ -301,6 +301,37 @@ def test_rssi_is_none_when_nothing_has_been_heard(device, monkeypatch) -> None:
     assert device.rssi is None
 
 
+def test_frames_nothing_decodes_are_published_as_raw_hex(device) -> None:
+    device._on_notify(
+        None,
+        bytearray(device_frame(protocol.OP_TIMERS, bytes.fromhex("000102030405"))),
+    )
+
+    assert device.data == {"raw_frame_17": "000102030405"}
+
+
+def test_a_partly_decoded_frame_publishes_its_raw_payload_as_well(device) -> None:
+    payload = bytes(6) + (17).to_bytes(2, "little") + b"\x09"
+    device._on_notify(None, bytearray(device_frame(protocol.OP_AC, payload)))
+
+    assert device.data["ac_discharge_pow"] == 17
+    assert device.data["raw_frame_0b"] == payload.hex()
+
+
+def test_a_changed_raw_payload_wakes_the_listeners(device, loop) -> None:
+    calls: list[int] = []
+    device.add_listener(lambda: calls.append(1))
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+    loop.pending[0].fire()
+
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+    assert device._notify_handle is None  # unchanged, so nothing scheduled
+
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, b"\x01" * 6)))
+    assert device._notify_handle is not None
+    assert calls == [1]
+
+
 def test_a_desynchronised_buffer_is_discarded(device) -> None:
     """Junk that never resynchronises must not grow without bound."""
     device._on_notify(None, bytearray(b"\x5a" * (MAX_BUFFER + 64)))

@@ -17,8 +17,13 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.ugreen_powerroam.const import BLE_SENSORS, DOMAIN
-from custom_components.ugreen_powerroam.sensor import UgreenBleLinkSensor
+from custom_components.ugreen_powerroam.const import (
+    BLE_RAW_KEYS,
+    BLE_SENSORS,
+    CLOUD_RAW_FIELDS,
+    DOMAIN,
+)
+from custom_components.ugreen_powerroam.sensor import UgreenBleLinkSensor, UgreenSensor
 
 SERIAL = "G12FE2305110337"
 ADDRESS = "AA:BB:CC:DD:EE:FF"
@@ -176,3 +181,59 @@ def test_last_frame_age_stays_available_while_the_link_is_down() -> None:
 
 def test_last_frame_age_is_unavailable_before_the_first_frame() -> None:
     assert link_sensor("ble_last_frame_age").available is False
+
+
+# -- raw-value sensors --------------------------------------------------------
+
+
+async def test_bluetooth_raw_frame_sensors_start_disabled(hass) -> None:
+    entry = await setup_ble(hass)
+
+    entries = sensor_entries(hass, entry)
+
+    assert set(BLE_RAW_KEYS.values()) <= set(entries)
+    assert not set(CLOUD_RAW_FIELDS) & set(entries)
+    for key in BLE_RAW_KEYS.values():
+        assert entries[key].disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        assert entries[key].entity_category is EntityCategory.DIAGNOSTIC
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_cloud_raw_field_sensors_start_disabled(hass) -> None:
+    entry = await setup_cloud(hass)
+
+    entries = sensor_entries(hass, entry)
+
+    assert set(CLOUD_RAW_FIELDS) <= set(entries)
+    assert not set(BLE_RAW_KEYS.values()) & set(entries)
+    for key in CLOUD_RAW_FIELDS:
+        assert entries[key].disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        assert entries[key].entity_category is EntityCategory.DIAGNOSTIC
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+def raw_sensor(key: str, value) -> UgreenSensor:
+    hub = SimpleNamespace(
+        unique_id_base=SERIAL,
+        device_name="ugreen gs1200",
+        sn=SERIAL,
+        available=True,
+        data={key: value},
+    )
+    return UgreenSensor(hub, hub, key)
+
+
+def test_a_raw_value_is_shown_exactly_as_received() -> None:
+    # The cloud sends some of these as strings, some as numbers.
+    assert raw_sensor("timeoff_zoom", "0").native_value == "0"
+    assert raw_sensor("low_power_al_set", 2).native_value == 2
+    assert raw_sensor("raw_frame_17", "000102030405").native_value == "000102030405"
+
+
+def test_a_raw_frame_too_long_for_a_state_is_cut_rather_than_lost() -> None:
+    sensor = raw_sensor("raw_frame_17", "ab" * 200)
+
+    assert sensor.native_value == "ab" * 127 + "a"
+    assert len(sensor.native_value) == 255

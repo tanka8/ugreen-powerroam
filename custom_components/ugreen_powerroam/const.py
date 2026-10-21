@@ -76,6 +76,46 @@ SWITCHES = {
     "lamp_sw": "Flashlight",
 }
 
+# Raw-value sensors for the fields this integration cannot interpret yet. Each
+# shows its value exactly as the unit sent it, so someone with a different model
+# can watch what moves when a load is plugged in or a setting is changed in the
+# app, and report back. They are diagnostics, start disabled (see
+# DISABLED_BY_DEFAULT_SENSORS), and are not something to build automations on.
+#
+# Bluetooth: opcode -> what the app calls the frame; the sensor shows the
+# payload as hex. These are the opcodes protocol.py leaves unmapped, plus 0x0B
+# and 0x0C, where the bytes that are mapped are only part of the payload and the
+# voltage bytes read zero on the 1200W - a model that fills them in is exactly
+# what these are for. An opcode a unit never sends stays unavailable.
+BLE_RAW_FRAMES = {
+    0x01: "Fault",
+    0x0B: "AC",
+    0x0C: "Ports",
+    0x10: "Screen Brightness",
+    0x11: "Screen Timeout",
+    0x14: "DC Charge Current",
+    0x15: "Low Battery Alarm",
+    0x17: "Timer",
+}
+BLE_RAW_KEYS = {opcode: f"raw_frame_{opcode:02x}" for opcode in BLE_RAW_FRAMES}
+
+# Cloud: the telemetry keys the README lists as reported but not exposed, with
+# the label it gives them. The three timers and U-Turbo are the least certain.
+CLOUD_RAW_FIELDS = {
+    "bat_health_set": "Battery Preservation Setting",
+    "low_sound_set": "Quiet Mode Setting",
+    "bee_sound_set_key": "Key Tone Setting",
+    "bee_sound_set_warning": "Warning Tone Setting",
+    "display_bright_set": "Display Brightness Setting",
+    "low_power_al_set": "Low Battery Alarm Setting",
+    "time_shutdown": "Shutdown Timer time_shutdown",
+    "time_dis_shutdown": "Shutdown Timer time_dis_shutdown",
+    "timeoff_set": "Shutdown Timer timeoff_set",
+    "timeoff_cap": "Shutdown Timer timeoff_cap",
+    "timeoff_zoom": "Shutdown Timer timeoff_zoom",
+    "switch_conpower": "U-Turbo (unconfirmed) switch_conpower",
+}
+
 # Sensor entities: key -> (name, unit, device_class, state_class, entity_category, icon)
 # Left unit/device_class as None where the raw scale wasn't confirmed against
 # a known reference value during capture - still useful for graphing/automations,
@@ -205,6 +245,21 @@ SENSORS = {
         "diagnostic",
         "mdi:timer-outline",
     ),
+    **{
+        BLE_RAW_KEYS[opcode]: (
+            f"Raw {label} Frame (0x{opcode:02X})",
+            None,
+            None,
+            None,
+            "diagnostic",
+            "mdi:code-braces",
+        )
+        for opcode, label in BLE_RAW_FRAMES.items()
+    },
+    **{
+        key: (f"{label} (raw)", None, None, None, "diagnostic", "mdi:code-braces")
+        for key, label in CLOUD_RAW_FIELDS.items()
+    },
 }
 
 # Readings about the Bluetooth link rather than the power station. They come
@@ -216,9 +271,13 @@ BLE_LINK_SENSORS = {
 }
 
 # Entities that exist to troubleshoot rather than to use. They are registered
-# disabled, so nobody gets a pair of extra entities (and their history) they did
-# not ask for; turn them on from the entity's settings.
-DISABLED_BY_DEFAULT_SENSORS = {*BLE_LINK_SENSORS}
+# disabled, so nobody gets extra entities (and their history) they did not ask
+# for; turn them on from the entity's settings.
+DISABLED_BY_DEFAULT_SENSORS = {
+    *BLE_LINK_SENSORS,
+    *BLE_RAW_KEYS.values(),
+    *CLOUD_RAW_FIELDS,
+}
 
 # Which sensors each transport can actually populate. Entities are only created
 # for keys their transport can fill, so neither setup carries a permanently
@@ -243,12 +302,18 @@ BLE_SENSORS = {
     "bat_cap_remain",
     *(f"cell_voltage_{n}" for n in range(1, 8)),
     *BLE_LINK_SENSORS,
+    *BLE_RAW_KEYS.values(),
 }
 
 # Per-cell voltages have no cloud equivalent - the WebSocket never reports them.
 # They are one of the things local Bluetooth buys you. The link readings are
-# about a Bluetooth connection, so the cloud has nothing to say about them.
-BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)} | set(BLE_LINK_SENSORS)
+# about a Bluetooth connection, so the cloud has nothing to say about them, and
+# the raw frames are Bluetooth opcodes.
+BLE_ONLY_SENSORS = (
+    {f"cell_voltage_{n}" for n in range(1, 8)}
+    | set(BLE_LINK_SENSORS)
+    | set(BLE_RAW_KEYS.values())
+)
 
 # The cloud transport is offered everything except what only Bluetooth can fill.
 # BLE_ONLY_SENSORS used to be defined and never applied, so a cloud setup got

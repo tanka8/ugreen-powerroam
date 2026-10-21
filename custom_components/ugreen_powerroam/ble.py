@@ -33,6 +33,7 @@ from homeassistant.exceptions import HomeAssistantError
 from . import protocol
 from .const import (
     BLE_NOTIFY_UUID,
+    BLE_RAW_KEYS,
     BLE_RECONNECT_BACKOFF_MAX,
     BLE_RECONNECT_BACKOFF_START,
     BLE_STATE_DEBOUNCE,
@@ -394,7 +395,13 @@ class UgreenBleDevice:
                 if identity:
                     self.sn = identity
 
-            for key, value in protocol.telemetry_from_frame(frame).items():
+            values: dict[str, Any] = dict(protocol.telemetry_from_frame(frame))
+            # The raw-value sensors show the payload as the unit sent it, for
+            # the frames nothing here can interpret (or only partly can).
+            if (raw_key := BLE_RAW_KEYS.get(frame.cmd)) is not None:
+                values[raw_key] = frame.data.hex()
+
+            for key, value in values.items():
                 if self.data.get(key) != value:
                     self.data[key] = value
                     changed = True
