@@ -280,6 +280,9 @@ class UgreenBleDevice:
         changed = False
         for frame in frames:
             if not frame.crc_ok:
+                # Nothing in a failed frame is trusted, its length included, so
+                # decode_stream has already resumed one byte after its header:
+                # the good frames behind it are further down this same list.
                 _LOGGER.debug("dropping BLE frame with bad CRC: %s", frame.raw.hex())
                 continue
             if _FRAME_LOGGER.isEnabledFor(logging.DEBUG):

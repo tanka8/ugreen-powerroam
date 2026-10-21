@@ -226,6 +226,21 @@ def test_bad_crc_frames_are_dropped(device) -> None:
     assert device.data == {}
 
 
+def test_a_damaged_length_does_not_cost_the_frames_behind_it(device) -> None:
+    """The damaged frame is dropped and the good one next to it still lands.
+
+    It claims 14 bytes but is only 10, so trusting the length would have eaten
+    the first four bytes of the totals frame that follows.
+    """
+    damaged = bytearray(device_frame(protocol.OP_WORK_MODE, b"\x02"))
+    damaged[5:7] = (5).to_bytes(2, "little")
+
+    device._on_notify(None, bytearray(bytes(damaged) + totals_frame(320, 75)))
+
+    assert device.data["charge_power_all"] == 320
+    assert "work_mode" not in device.data
+
+
 def test_a_desynchronised_buffer_is_discarded(device) -> None:
     """Junk that never resynchronises must not grow without bound."""
     device._on_notify(None, bytearray(b"\x5a" * (MAX_BUFFER + 64)))

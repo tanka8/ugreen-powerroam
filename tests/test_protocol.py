@@ -429,3 +429,114 @@ def test_no_opcode_raises_on_an_empty_payload() -> None:
 
 def test_parse_serial_gives_up_on_anything_shorter_than_a_serial() -> None:
     assert protocol.parse_serial(b"NOPE") == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# A damaged length field must not take its neighbours down with it.
+#
+# A frame is only trusted to say how long it is once its CRC has passed. Before
+# that was the rule, a corrupted length was followed regardless: the decoder
+# skipped that many bytes, and every good frame inside the span was lost.
+# ---------------------------------------------------------------------------
+
+GOOD_FRAME = protocol.encode(protocol.OP_WORK_MODE, b"\x07")
+
+
+def with_length(frame: bytes, length: int) -> bytes:
+    """Overwrite a frame's length field and leave every other byte alone."""
+    return frame[:5] + length.to_bytes(2, "little") + frame[7:]
+
+
+def test_corrupted_length_does_not_swallow_the_next_frame() -> None:
+    """Regression: a too-long length used to eat the start of the next frame.
+
+    The damaged frame is 10 bytes long but claims 14, so trusting it skipped
+    four bytes of the good frame behind it and that frame was never decoded.
+    """
+    damaged = with_length(protocol.encode(protocol.OP_LIGHT, b"\x01"), 5)
+
+    frames, consumed = protocol.decode_stream(damaged + GOOD_FRAME)
+
+    assert [f.crc_ok for f in frames] == [False, True]
+    assert frames[1].cmd == protocol.OP_WORK_MODE
+    assert frames[1].data == b"\x07"
+    assert consumed == len(damaged + GOOD_FRAME)
+
+
+def test_impossible_length_is_skipped_without_waiting_for_it() -> None:
+    """A length of 65535 used to stall the stream until the buffer cap hit."""
+    damaged = with_length(protocol.encode(protocol.OP_LIGHT, b"\x01"), 0xFFFF)
+
+    frames, consumed = protocol.decode_stream(damaged + GOOD_FRAME)
+
+    assert [f.cmd for f in frames] == [protocol.OP_WORK_MODE]
+    assert consumed == len(damaged + GOOD_FRAME)
+
+
+def test_length_at_the_limit_is_still_a_frame() -> None:
+    """The cap is on the claim, so a legitimately long payload is not refused."""
+    data = bytes(protocol.MAX_DATA_LENGTH)
+
+    (frame,) = protocol.decode_frames(protocol.encode(protocol.OP_BATTERY, data))
+
+    assert frame.crc_ok
+    assert frame.data == data
+
+
+def test_length_over_the_limit_is_not_a_frame() -> None:
+    data = bytes(protocol.MAX_DATA_LENGTH + 1)
+
+    assert protocol.decode_frames(protocol.encode(protocol.OP_BATTERY, data)) == []
+
+
+def test_a_plausible_but_wrong_length_resolves_once_enough_has_arrived() -> None:
+    """A damaged length inside the cap makes the decoder wait for that many bytes.
+
+    That is unavoidable - the bytes might be a real frame still arriving - but
+    when they do arrive and the CRC fails, every good frame in the span must
+    come out rather than be discarded with the damaged one.
+    """
+    damaged = with_length(
+        protocol.encode(protocol.OP_LIGHT, b"\x01"), protocol.MAX_DATA_LENGTH
+    )
+    buffer = bytearray(damaged + GOOD_FRAME)
+    decoded: list[protocol.Frame] = []
+
+    sent = 1
+    for _ in range(40):
+        frames, consumed = protocol.decode_stream(bytes(buffer))
+        del buffer[:consumed]
+        decoded.extend(frames)
+        buffer.extend(GOOD_FRAME)
+        sent += 1
+    frames, consumed = protocol.decode_stream(bytes(buffer))
+    decoded.extend(frames)
+
+    assert [f.crc_ok for f in decoded].count(False) == 1
+    assert [f.crc_ok for f in decoded].count(True) == sent
+
+
+def test_payload_corruption_still_costs_only_that_frame() -> None:
+    """The ordinary case - right length, flipped bits - behaves as it always did."""
+    damaged = bytearray(protocol.encode(protocol.OP_LIGHT, b"\x01"))
+    damaged[7] ^= 0xFF
+
+    frames, _ = protocol.decode_stream(bytes(damaged) + GOOD_FRAME)
+
+    assert [f.crc_ok for f in frames] == [False, True]
+    assert frames[1].data == b"\x07"
+
+
+def test_a_failed_frame_is_reported_once_across_packets() -> None:
+    """Resyncing a byte at a time must not make the caller see it again."""
+    damaged = with_length(protocol.encode(protocol.OP_LIGHT, b"\x01"), 5)
+    buffer = bytearray(damaged + GOOD_FRAME[:6])
+
+    first, consumed = protocol.decode_stream(bytes(buffer))
+    del buffer[:consumed]
+    buffer.extend(GOOD_FRAME[6:])
+    second, consumed = protocol.decode_stream(bytes(buffer))
+
+    assert [f.crc_ok for f in first] == [False]
+    assert [f.cmd for f in second] == [protocol.OP_WORK_MODE]
+    assert consumed == len(GOOD_FRAME)
