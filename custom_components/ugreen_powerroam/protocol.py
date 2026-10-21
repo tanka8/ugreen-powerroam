@@ -52,6 +52,51 @@ OP_WORK_MODE = 0x12
 OP_LIGHT = 0x13
 OP_SWITCHES = 0x16
 
+# Opcodes the app bundle names but this integration decodes nothing from - see
+# "Not mapped, on purpose" further down. They are known, so seeing one is not news.
+OP_BRIGHTNESS = 0x10
+OP_SCREEN_TIMEOUT = 0x11
+OP_DC_CHARGE_CURRENT = 0x14
+OP_LOW_BATTERY_ALARM = 0x15
+OP_TIMERS = 0x17
+
+# Everything named above, for telling "the app knows this opcode" from "no one
+# has seen this before". A frame outside this set is what a different model, or
+# a newer firmware, is most likely to put on the wire, and is what the
+# diagnostics download counts and keeps a sample of.
+KNOWN_OPCODES = frozenset(
+    {
+        CMD_GET_SERIAL,
+        CMD_GET_VERSION,
+        CMD_GET_MAC,
+        OP_FAULT,
+        OP_TEMPS,
+        OP_BATTERY,
+        OP_AC,
+        OP_PORTS,
+        OP_TOTALS,
+        OP_BRIGHTNESS,
+        OP_SCREEN_TIMEOUT,
+        OP_WORK_MODE,
+        OP_LIGHT,
+        OP_DC_CHARGE_CURRENT,
+        OP_LOW_BATTERY_ALARM,
+        OP_SWITCHES,
+        OP_TIMERS,
+    }
+)
+
+
+# The most payload bytes a frame may claim before it is treated as junk. The
+# length field is a uint16, but nothing real comes close: the largest payload
+# seen from a PowerRoam GS1200 is the 30-byte serial reply (0x05, two 15
+# character serials) and the largest status frame is the 28-byte battery block
+# (0x09). 255 is about eight times that - roomy enough that a sibling model
+# with a longer block still decodes - while a damaged length field, which is
+# nearly always far larger, is rejected at once instead of making the decoder
+# wait for bytes that will never arrive.
+MAX_DATA_LENGTH = 255
+
 
 def crc16_modbus(data: bytes) -> int:
     """Modbus CRC-16. Verified byte-for-byte against the app's own tables."""
@@ -94,6 +139,14 @@ def decode_stream(buf: bytes) -> tuple[list[Frame], int]:
     Tolerates the zero padding the device appends and any leading junk by
     resynchronising on the 5A A5 header. A trailing partial frame is left
     unconsumed rather than guessed at.
+
+    A frame whose CRC fails is still returned, flagged ``crc_ok=False``, but it
+    is not trusted to be as long as it claims: the damage may be in the length
+    field itself, and skipping that many bytes would swallow the good frames
+    behind it. Decoding therefore carries on from the byte after the failed
+    header, so any real frame inside that span is still found. A header that
+    claims an impossible length (see MAX_DATA_LENGTH) is not a frame at all
+    and is skipped the same way, without being returned.
     """
     frames: list[Frame] = []
     i = 0
@@ -104,20 +157,29 @@ def decode_stream(buf: bytes) -> tuple[list[Frame], int]:
             continue
         if i + 7 > len(buf):
             break
-        total = int.from_bytes(buf[i + 5 : i + 7], "little") + 9
+        length = int.from_bytes(buf[i + 5 : i + 7], "little")
+        if length > MAX_DATA_LENGTH:
+            # Cannot be a real frame. Waiting for this many bytes would stall
+            # the stream until the caller's buffer cap forced a clear.
+            i += 1
+            consumed = i
+            continue
+        total = length + 9
         if i + total > len(buf):
             break
         raw = buf[i : i + total]
+        crc_ok = crc16_modbus(raw[2:-2]) == int.from_bytes(raw[-2:], "little")
         frames.append(
             Frame(
                 prefix=raw[2:4],
                 cmd=raw[4],
                 data=raw[7:-2],
-                crc_ok=crc16_modbus(raw[2:-2]) == int.from_bytes(raw[-2:], "little"),
+                crc_ok=crc_ok,
                 raw=raw,
             )
         )
-        i += total
+        # Only a frame that checks out is trusted to say how long it is.
+        i += total if crc_ok else 1
         consumed = i
 
     # Drop trailing bytes that cannot begin a frame - notably the zero padding

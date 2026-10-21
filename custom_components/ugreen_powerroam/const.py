@@ -76,6 +76,46 @@ SWITCHES = {
     "lamp_sw": "Flashlight",
 }
 
+# Raw-value sensors for the fields this integration cannot interpret yet. Each
+# shows its value exactly as the unit sent it, so someone with a different model
+# can watch what moves when a load is plugged in or a setting is changed in the
+# app, and report back. They are diagnostics, start disabled (see
+# DISABLED_BY_DEFAULT_SENSORS), and are not something to build automations on.
+#
+# Bluetooth: opcode -> what the app calls the frame; the sensor shows the
+# payload as hex. These are the opcodes protocol.py leaves unmapped, plus 0x0B
+# and 0x0C, where the bytes that are mapped are only part of the payload and the
+# voltage bytes read zero on the 1200W - a model that fills them in is exactly
+# what these are for. An opcode a unit never sends stays unavailable.
+BLE_RAW_FRAMES = {
+    0x01: "Fault",
+    0x0B: "AC",
+    0x0C: "Ports",
+    0x10: "Screen Brightness",
+    0x11: "Screen Timeout",
+    0x14: "DC Charge Current",
+    0x15: "Low Battery Alarm",
+    0x17: "Timer",
+}
+BLE_RAW_KEYS = {opcode: f"raw_frame_{opcode:02x}" for opcode in BLE_RAW_FRAMES}
+
+# Cloud: the telemetry keys the README lists as reported but not exposed, with
+# the label it gives them. The three timers and U-Turbo are the least certain.
+CLOUD_RAW_FIELDS = {
+    "bat_health_set": "Battery Preservation Setting",
+    "low_sound_set": "Quiet Mode Setting",
+    "bee_sound_set_key": "Key Tone Setting",
+    "bee_sound_set_warning": "Warning Tone Setting",
+    "display_bright_set": "Display Brightness Setting",
+    "low_power_al_set": "Low Battery Alarm Setting",
+    "time_shutdown": "Shutdown Timer time_shutdown",
+    "time_dis_shutdown": "Shutdown Timer time_dis_shutdown",
+    "timeoff_set": "Shutdown Timer timeoff_set",
+    "timeoff_cap": "Shutdown Timer timeoff_cap",
+    "timeoff_zoom": "Shutdown Timer timeoff_zoom",
+    "switch_conpower": "U-Turbo (unconfirmed) switch_conpower",
+}
+
 # Sensor entities: key -> (name, unit, device_class, state_class, entity_category, icon)
 # Left unit/device_class as None where the raw scale wasn't confirmed against
 # a known reference value during capture - still useful for graphing/automations,
@@ -189,6 +229,84 @@ SENSORS = {
         )
         for n in range(1, 8)
     },
+    "ble_rssi": (
+        "Bluetooth Signal Strength",
+        "dBm",
+        "signal_strength",
+        "measurement",
+        "diagnostic",
+        None,
+    ),
+    "ble_last_frame_age": (
+        "Bluetooth Last Frame Age",
+        "s",
+        "duration",
+        "measurement",
+        "diagnostic",
+        "mdi:timer-outline",
+    ),
+    "energy_input": (
+        "Input Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        None,
+        None,
+    ),
+    "energy_output": (
+        "Total Output Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        None,
+        None,
+    ),
+    **{
+        BLE_RAW_KEYS[opcode]: (
+            f"Raw {label} Frame (0x{opcode:02X})",
+            None,
+            None,
+            None,
+            "diagnostic",
+            "mdi:code-braces",
+        )
+        for opcode, label in BLE_RAW_FRAMES.items()
+    },
+    **{
+        key: (f"{label} (raw)", None, None, None, "diagnostic", "mdi:code-braces")
+        for key, label in CLOUD_RAW_FIELDS.items()
+    },
+}
+
+# Readings about the Bluetooth link rather than the power station. They come
+# from the Bluetooth stack, not from a frame: key -> the UgreenBleDevice
+# attribute that holds the value.
+BLE_LINK_SENSORS = {
+    "ble_rssi": "rssi",
+    "ble_last_frame_age": "last_frame_age",
+}
+
+# Cumulative energy, for the Energy dashboard: key -> the power reading it is
+# integrated from. Neither transport reports an energy counter, so these are
+# summed up in Home Assistant (see energy.py) and restored across restarts.
+ENERGY_SENSORS = {
+    "energy_input": "charge_power_all",
+    "energy_output": "discharge_pow",
+}
+
+# The unit pushes a frame about every 0.6 seconds. If none has arrived for this
+# long the link is treated as stalled even though the connection still looks
+# open, and power is no longer integrated - a half-open connection would
+# otherwise be counted as the last reading, held, for as long as it lasted.
+BLE_FRAME_STALE_AFTER = 20
+
+# Entities that exist to troubleshoot rather than to use. They are registered
+# disabled, so nobody gets extra entities (and their history) they did not ask
+# for; turn them on from the entity's settings.
+DISABLED_BY_DEFAULT_SENSORS = {
+    *BLE_LINK_SENSORS,
+    *BLE_RAW_KEYS.values(),
+    *CLOUD_RAW_FIELDS,
 }
 
 # Which sensors each transport can actually populate. Entities are only created
@@ -213,11 +331,25 @@ BLE_SENSORS = {
     "bat_cycle_num",
     "bat_cap_remain",
     *(f"cell_voltage_{n}" for n in range(1, 8)),
+    *BLE_LINK_SENSORS,
+    *BLE_RAW_KEYS.values(),
+    *ENERGY_SENSORS,
 }
 
 # Per-cell voltages have no cloud equivalent - the WebSocket never reports them.
-# They are one of the things local Bluetooth buys you.
-BLE_ONLY_SENSORS = {f"cell_voltage_{n}" for n in range(1, 8)}
+# They are one of the things local Bluetooth buys you. The link readings are
+# about a Bluetooth connection, so the cloud has nothing to say about them, and
+# the raw frames are Bluetooth opcodes.
+BLE_ONLY_SENSORS = (
+    {f"cell_voltage_{n}" for n in range(1, 8)}
+    | set(BLE_LINK_SENSORS)
+    | set(BLE_RAW_KEYS.values())
+)
+
+# The cloud transport is offered everything except what only Bluetooth can fill.
+# BLE_ONLY_SENSORS used to be defined and never applied, so a cloud setup got
+# seven cell-voltage sensors that could never have a value.
+CLOUD_SENSORS = set(SENSORS) - BLE_ONLY_SENSORS
 
 # Raw values for these keys come from the API in seconds. native stays in
 # seconds (so history/statistics don't break); suggested_unit_of_measurement

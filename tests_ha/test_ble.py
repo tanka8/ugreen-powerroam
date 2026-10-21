@@ -12,12 +12,13 @@ The wire format itself is covered without any of this in tests/test_protocol.py.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from bleak.exc import BleakError
 
-from custom_components.ugreen_powerroam import protocol
+from custom_components.ugreen_powerroam import ble, protocol
 from custom_components.ugreen_powerroam.ble import (
     MAX_BUFFER,
     UgreenBleDevice,
@@ -51,6 +52,12 @@ class FakeClient:
         if self.fail_with is not None:
             raise self.fail_with
         self.writes.append(bytes(data))
+
+    async def start_notify(self, uuid, callback) -> None:
+        self.notify_callback = callback
+
+    async def disconnect(self) -> None:
+        self.is_connected = False
 
 
 class FakeHandle:
@@ -226,6 +233,105 @@ def test_bad_crc_frames_are_dropped(device) -> None:
     assert device.data == {}
 
 
+def test_a_damaged_length_does_not_cost_the_frames_behind_it(device) -> None:
+    """The damaged frame is dropped and the good one next to it still lands.
+
+    It claims 14 bytes but is only 10, so trusting the length would have eaten
+    the first four bytes of the totals frame that follows.
+    """
+    damaged = bytearray(device_frame(protocol.OP_WORK_MODE, b"\x02"))
+    damaged[5:7] = (5).to_bytes(2, "little")
+
+    device._on_notify(None, bytearray(bytes(damaged) + totals_frame(320, 75)))
+
+    assert device.data["charge_power_all"] == 320
+    assert "work_mode" not in device.data
+
+
+def test_counters_separate_good_bad_and_unknown_frames(device) -> None:
+    bad = bytearray(totals_frame(1, 2))
+    bad[7] ^= 0xFF
+    payload = totals_frame(320, 75) + bytes(bad) + device_frame(0x7E, b"\x01\x02")
+
+    device._on_notify(None, bytearray(payload))
+
+    assert device.frames_received == 3
+    assert device.crc_failures == 1
+    # Only frames that passed the CRC are attributed to an opcode.
+    assert device.opcode_counts == {protocol.OP_TOTALS: 1, 0x7E: 1}
+    report = device.diagnostics()
+    assert report["unknown_opcodes"] == {"0x7e": {"count": 1, "last_payload": "0102"}}
+
+
+def test_known_but_unmapped_opcodes_are_not_reported_as_unknown(device) -> None:
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+
+    assert device.opcode_counts == {protocol.OP_TIMERS: 1}
+    assert device.diagnostics()["unknown_opcodes"] == {}
+
+
+def test_last_frame_age_counts_from_the_last_good_frame(device) -> None:
+    assert device.last_frame_age is None
+
+    device._on_notify(None, bytearray(totals_frame(1, 2)))
+    device._last_frame_at -= 7.5  # as if it arrived 7.5 seconds ago
+
+    assert 7.5 <= device.last_frame_age < 8.5
+
+
+def test_a_bad_frame_does_not_refresh_the_last_frame_age(device) -> None:
+    bad = bytearray(totals_frame(1, 2))
+    bad[7] ^= 0xFF
+
+    device._on_notify(None, bad)
+
+    assert device.last_frame_age is None
+
+
+def test_rssi_is_the_signal_of_the_last_advertisement(device, monkeypatch) -> None:
+    heard = SimpleNamespace(rssi=-71)
+    monkeypatch.setattr(ble.bluetooth, "async_last_service_info", lambda *a, **k: heard)
+
+    assert device.rssi == -71
+
+
+def test_rssi_is_none_when_nothing_has_been_heard(device, monkeypatch) -> None:
+    monkeypatch.setattr(ble.bluetooth, "async_last_service_info", lambda *a, **k: None)
+
+    assert device.rssi is None
+
+
+def test_frames_nothing_decodes_are_published_as_raw_hex(device) -> None:
+    device._on_notify(
+        None,
+        bytearray(device_frame(protocol.OP_TIMERS, bytes.fromhex("000102030405"))),
+    )
+
+    assert device.data == {"raw_frame_17": "000102030405"}
+
+
+def test_a_partly_decoded_frame_publishes_its_raw_payload_as_well(device) -> None:
+    payload = bytes(6) + (17).to_bytes(2, "little") + b"\x09"
+    device._on_notify(None, bytearray(device_frame(protocol.OP_AC, payload)))
+
+    assert device.data["ac_discharge_pow"] == 17
+    assert device.data["raw_frame_0b"] == payload.hex()
+
+
+def test_a_changed_raw_payload_wakes_the_listeners(device, loop) -> None:
+    calls: list[int] = []
+    device.add_listener(lambda: calls.append(1))
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+    loop.pending[0].fire()
+
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, bytes(6))))
+    assert device._notify_handle is None  # unchanged, so nothing scheduled
+
+    device._on_notify(None, bytearray(device_frame(protocol.OP_TIMERS, b"\x01" * 6)))
+    assert device._notify_handle is not None
+    assert calls == [1]
+
+
 def test_a_desynchronised_buffer_is_discarded(device) -> None:
     """Junk that never resynchronises must not grow without bound."""
     device._on_notify(None, bytearray(b"\x5a" * (MAX_BUFFER + 64)))
@@ -394,6 +500,45 @@ async def test_a_control_write_notifies_immediately(device) -> None:
 
 
 # -- lifecycle --------------------------------------------------------------
+
+
+async def test_listeners_are_told_when_the_link_drops(device) -> None:
+    """Regression: entities never went unavailable, because nothing woke them.
+
+    They read .available only when they write their state, and with the link
+    down no frames arrive to make them.
+    """
+    states: list[bool] = []
+    device.add_listener(lambda: states.append(device.available))
+    device._client = FakeClient()
+
+    await device._disconnect()
+
+    assert states == [False]
+
+
+async def test_listeners_are_told_when_the_link_comes_up(device, monkeypatch) -> None:
+    client = FakeClient()
+    states: list[bool] = []
+    device.add_listener(lambda: states.append(device.available))
+
+    async def establish(*args, **kwargs):
+        return client
+
+    monkeypatch.setattr(ble, "establish_connection", establish)
+    monkeypatch.setattr(
+        ble.bluetooth, "async_ble_device_from_address", lambda *a, **k: object()
+    )
+
+    task = asyncio.create_task(device._connect_once())
+    await asyncio.sleep(0)
+    assert states == [True]
+    assert device.connect_count == 1
+
+    device._disconnected.set()
+    await task
+
+    assert states == [True, False]
 
 
 async def test_stop_cancels_a_pending_debounce(device) -> None:
