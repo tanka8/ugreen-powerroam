@@ -38,14 +38,17 @@ jobs:
           python-version: "3.14"
       # The integration depends on bluetooth_adapters, so Home Assistant sets
       # that component up during these tests and needs its runtime stack
-      # present. The harness does not pull these in on its own.
+      # present. The harness does not pull these in on its own. serialx is the
+      # serial layer the usb component imports since Home Assistant 2026.10 (its
+      # manifest lists aiousbwatcher and serialx); without it importing
+      # homeassistant.components.bluetooth fails at collection.
       #
       # The floor is the release this was written against (0.13.373, Home Assistant
       # 2026.10.2). If the Python version here ever stops satisfying the harness,
       # pip fails on it instead of quietly falling back to an old release.
       - run: >
           pip install "pytest-homeassistant-custom-component>=0.13.373"
-          aiousbwatcher pyserial usb-devices
+          aiousbwatcher serialx pyserial usb-devices
           bluetooth-adapters habluetooth bleak bleak-retry-connector
       # So the version under test is visible in the log.
       - name: show the resolved Home Assistant versions
