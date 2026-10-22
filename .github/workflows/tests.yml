@@ -27,20 +27,34 @@ jobs:
 
   config-flow-tests:
     # The Home Assistant test harness does not work on Windows, so these run only
-    # here. Python 3.13 to get the newest harness pip will resolve.
+    # here. Python 3.14 because pytest-homeassistant-custom-component 0.13.317 and
+    # later require it: on 3.13 pip silently resolved 0.13.316 (Home Assistant
+    # 2026.2.3) instead of the current release.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
       # The integration depends on bluetooth_adapters, so Home Assistant sets
       # that component up during these tests and needs its runtime stack
-      # present. The harness does not pull these in on its own.
+      # present. The harness does not pull these in on its own. serialx replaced
+      # pyserial in the usb component's requirements between Home Assistant 2026.3
+      # and 2026.5; without it importing homeassistant.components.bluetooth fails
+      # at collection with ModuleNotFoundError.
+      #
+      # The floor is the release this was written against (0.13.373, Home Assistant
+      # 2026.10.2). If the Python version here ever stops satisfying the harness,
+      # pip fails on it instead of quietly falling back to an old release.
       - run: >
-          pip install pytest-homeassistant-custom-component
-          aiousbwatcher pyserial usb-devices
+          pip install "pytest-homeassistant-custom-component>=0.13.373"
+          aiousbwatcher serialx pyserial usb-devices
           bluetooth-adapters habluetooth bleak bleak-retry-connector
+      # So the version under test is visible in the log.
+      - name: show the resolved Home Assistant versions
+        run: |
+          python --version
+          pip list --format=freeze | grep -i -E '^(homeassistant|pytest-homeassistant-custom-component|voluptuous|bleak|habluetooth|bluetooth-adapters)=='
       # Run from inside tests_ha so its own pytest.ini applies. The root config
       # disables the Home Assistant plugin, which these tests require.
       - run: python -m pytest . -v
