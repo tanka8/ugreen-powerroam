@@ -38,10 +38,10 @@ jobs:
           python-version: "3.14"
       # The integration depends on bluetooth_adapters, so Home Assistant sets
       # that component up during these tests and needs its runtime stack
-      # present. The harness does not pull these in on its own. serialx is the
-      # serial layer the usb component imports since Home Assistant 2026.10 (its
-      # manifest lists aiousbwatcher and serialx); without it importing
-      # homeassistant.components.bluetooth fails at collection.
+      # present. The harness does not pull these in on its own. serialx replaced
+      # pyserial in the usb component's requirements between Home Assistant 2026.3
+      # and 2026.5; without it importing homeassistant.components.bluetooth fails
+      # at collection with ModuleNotFoundError.
       #
       # The floor is the release this was written against (0.13.373, Home Assistant
       # 2026.10.2). If the Python version here ever stops satisfying the harness,
