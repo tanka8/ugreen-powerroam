@@ -338,7 +338,18 @@ class UgreenBleDevice:
         finally:
             await self._disconnect()
 
-    def _on_disconnect(self, _client) -> None:
+    def _on_disconnect(self, client) -> None:
+        # Only the client currently held counts. establish_connection() fires
+        # this callback for every attempt that fails on the way to the one that
+        # succeeds - on a busy shared radio that can be dozens of times. Before
+        # this check each of those set _disconnected, so the moment the
+        # connection finally came up _connect_once() found it already "lost",
+        # tore it down and started another slow connect. self._client is
+        # assigned right after establish_connection() returns, with no await in
+        # between, so the live client can never be mistaken for a stale one.
+        if client is not self._client:
+            _LOGGER.debug("PowerRoam BLE: ignoring disconnect from a client not held")
+            return
         self._hass.loop.call_soon_threadsafe(self._disconnected.set)
 
     async def _disconnect(self) -> None:

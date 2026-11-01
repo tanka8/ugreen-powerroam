@@ -541,6 +541,48 @@ async def test_listeners_are_told_when_the_link_comes_up(device, monkeypatch) ->
     assert states == [True, False]
 
 
+async def test_failed_attempts_while_connecting_do_not_drop_the_link(
+    device, monkeypatch
+) -> None:
+    """Regression: a slow connect was torn down the moment it succeeded.
+
+    establish_connection() calls disconnected_callback for each attempt that
+    fails before the one that works. Those used to set _disconnected, so
+    _connect_once() returned straight away and the cycle started over.
+    """
+    client = FakeClient()
+
+    async def establish(*args, disconnected_callback=None, **kwargs):
+        for _ in range(3):
+            disconnected_callback(FakeClient(connected=False))
+        return client
+
+    monkeypatch.setattr(ble, "establish_connection", establish)
+    monkeypatch.setattr(
+        ble.bluetooth, "async_ble_device_from_address", lambda *a, **k: object()
+    )
+
+    task = asyncio.create_task(device._connect_once())
+    await asyncio.sleep(0)
+
+    assert not task.done()
+    assert device.available is True
+
+    # A disconnect of the client actually held still ends the connection.
+    device._on_disconnect(client)
+    await task
+
+    assert device.available is False
+
+
+def test_a_stale_client_cannot_end_the_current_connection(device) -> None:
+    device._client = FakeClient()
+
+    device._on_disconnect(FakeClient(connected=False))
+
+    assert not device._disconnected.is_set()
+
+
 async def test_stop_cancels_a_pending_debounce(device) -> None:
     device._on_notify(None, bytearray(totals_frame(1, 2)))
     assert device._notify_handle is not None
